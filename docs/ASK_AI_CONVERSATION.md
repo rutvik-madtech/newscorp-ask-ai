@@ -69,6 +69,7 @@ A conversation is listed and opened only when its tier and brand match the user'
 - Run `ApplyGuardrail` on the question (source `INPUT`).
 - Sensitive information is **masked**, not blocked. A pasted email address becomes `{EMAIL}` before it reaches Claude or the store. Ask AI can't look up individual profiles anyway, so nothing useful is lost.
 - If a denied topic matches, the turn ends with status `blocked` and Claude is not called.
+- **This check runs in parallel with loading the committed turns.** The load is one DynamoDB query on the conversation's partition, plus parallel S3 reads for any offloaded turns. It finishes well inside the Guardrails call, so it adds nothing to the wait.
 
 ### 4.3 Build the request
 
@@ -138,6 +139,26 @@ Each turn writes one structured record to CloudWatch, then on to S3 for Athena. 
 - Use the **5-minute TTL.** Follow-ups usually come within minutes, and every cache read resets the timer. Switch to the 1-hour TTL only if metrics show many follow-ups arriving after more than 5 minutes.
 - Opus 5.5 caches prefixes from 512 tokens. On the first-party API, cache reads cost 0.05× the input price and 5-minute writes cost 1.25×. Bedrock prices are set by AWS but are expected to follow the same pattern.
 - Watch `cache_read_input_tokens`. If it stays at zero, something in the prefix is changing between requests.
+
+### 5.1 Where the time goes
+
+Rough figures for one turn, to be replaced with pilot measurements:
+
+| Step | Rough time | On the user's wait? |
+|---|---|---|
+| Lock and load history from DynamoDB | Tens of milliseconds for a normal chat | No. It runs alongside the Guardrails check |
+| Guardrails on the question | A few hundred milliseconds | Yes |
+| Claude's first call (reads the request, decides to search) | About 1–2 s | Yes |
+| Knowledge Base retrieve and rerank | About 0.3–1 s | Yes |
+| Claude writes the answer | First words shortly after the results arrive, then streamed | Yes, but the user is already reading |
+| Commit to DynamoDB | Tens of milliseconds | No. It runs after streaming ends |
+
+- **What grows with chat length is Claude reading a longer request, not the database load.** Prompt caching keeps that fast: the earlier conversation is read from cache instead of being processed again. The 30-turn / 200k-token cap bounds it.
+- **Optional later: a version-checked session cache.**
+  - The orchestrator keeps the last loaded turns in AgentCore session memory, keyed by conversation ID and turn count.
+  - The lock write already returns the current turn count. If it matches the cached count, the query is skipped.
+  - DynamoDB stays the source of truth. A restart, another instance or another tab just means one normal load.
+  - Add this only if the load ever shows up in p95 latency.
 
 ---
 
