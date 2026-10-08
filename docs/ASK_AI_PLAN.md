@@ -78,19 +78,44 @@ The export job is where we **enforce the PII and tier rules**. It has an allow-l
 
 | Corpus | Parser | Chunking |
 |---|---|---|
-| KB-1 Markdown / HTML | Bedrock default parser | **Hierarchical** chunking (parent about 1,500 tokens, child about 300), so H2 sections stay together and the full section is returned as context |
-| KB-1 PDFs / decks with tables or diagrams (if any) | **Bedrock Data Automation** or the foundation-model parser | Hierarchical |
-| KB-2 entity docs | Default | **No chunking.** Each entity is already one small, self-contained document, and splitting it would separate column descriptions from their table |
+| KB-1 Markdown / HTML | Bedrock default parser | **Fixed-size** chunking, about 300–500 tokens with 10–20% overlap, so a chunk is one section or part of one. Try semantic chunking in the eval. S3 Vectors caps chunk size (see §3.2) |
+| KB-1 PDFs / decks with tables or diagrams (if any) | **Bedrock Data Automation** or the foundation-model parser | Same as above |
+| KB-2 entity docs | Default | **No chunking.** Each entity is already one small, self-contained document, and splitting it would separate column descriptions from their table. Keep each doc under the store's size cap by splitting very wide tables into a summary doc plus column-group docs |
 
 - **Embeddings:** Amazon Titan Text Embeddings V2 (1024 dimensions, normalised) is the baseline. Run Cohere Embed against it in the eval and pick the winner.
-- **Vector store:** **OpenSearch Serverless**, because it supports **hybrid (keyword + semantic) search**. This corpus is full of exact identifiers (`luid`, `ID5`, table names, segment names) that pure vector search handles poorly. S3 Vectors is the cheaper alternative if the OpenSearch Serverless OCU cost floor is a problem for the POC, but it gives up hybrid search.
+- **Vector store:** **Amazon S3 Vectors.** §3.2 explains why we don't start with OpenSearch.
 - **Reranking:** turn on the KB reranker (Amazon Rerank or Cohere Rerank). Retrieve about 20 results and keep the top 5–8.
 
-### 3.2 Graph (GraphRAG / Neptune Analytics): not in phase 1
+### 3.2 Vector store: S3 Vectors first, hybrid search only if the eval needs it
+
+A Bedrock KB needs a vector store to hold the chunks, their embeddings and the metadata we filter on. Bedrock can create one for us, but it lives in a separate service that we pay for and choose. The options:
+
+| Store | Search types in Bedrock KB | Idle cost (us-east-1, approx.) | Notes |
+|---|---|---|---|
+| **S3 Vectors** (GA Dec 2025) | Semantic only | **None.** Pay per GB stored and per query, a few dollars a month at our size | Nothing to provision or scale. Supports the metadata filters we need for tier and brand. Per-vector caps on chunk text and metadata size |
+| Aurora PostgreSQL Serverless v2 (pgvector) | Semantic or hybrid (hybrid since Apr 2025) | About $45/month at the 0.5 ACU minimum | A database to run (VPC, secrets, schema). Scale-to-zero has a cold start that is too slow for chat |
+| OpenSearch Serverless, classic | Semantic or hybrid | About $175/month without standby replicas (dev), about $350/month with them (production), **billed even with zero traffic** | Most mature Bedrock KB integration. Deleting the KB doesn't delete the collection, so it keeps billing |
+| OpenSearch Serverless, NextGen (GA May 2026) | Semantic or hybrid | Scales to zero when idle | Community reports show Bedrock KB retrieval failing against NextGen collections, and we found no AWS statement of support. Don't use it until AWS confirms |
+
+**Why hybrid search matters less than it first looks.** Its main benefit is matching exact identifiers like `luid`, `ID5`, table names and segment names, which pure semantic search can miss. Three cheaper measures cover that:
+
+- **An exact-lookup tool, `get_cdl_entity(type, name)`.** It reads the exported entity doc for that exact name from S3 and checks its `allowed_tiers` sidecar before returning it. Questions that name a specific table or audience don't depend on search ranking at all, and the tool reuses the export job's tier filtering.
+- **Short, focused entity docs** with the entity name in the title and first line embed well, and the reranker reorders whatever the search returns.
+- **Claude writes the search query**, so it can expand acronyms and add synonyms ("LUID / local user ID").
+
+**When to switch.** The golden set (§7) includes identifier-heavy questions. If those miss the threshold even with the lookup tool, move to a store with hybrid search:
+- **Aurora** if cost matters most.
+- **OpenSearch** if the CDL already runs it. NWS1-102 plans OpenSearch for Profile Search, and collections under the same KMS key share capacity, so the extra cost may be small. That index holds profile PII, so sharing needs security sign-off.
+
+Switching stores means creating a new KB and re-syncing the same S3 sources. At this corpus size that takes minutes, and the orchestrator only needs the new KB ID.
+
+**Check before build:** the current S3 Vectors limits on chunk size and metadata per vector, its region availability (e.g. Sydney for the AU brands), and pricing in the target region.
+
+### 3.3 Graph (GraphRAG / Neptune Analytics): not in phase 1
 
 Bedrock KB does support GraphRAG through Neptune Analytics. We are not using it in phase 1, for four reasons:
 
-1. **The corpus is small and mostly how-to questions.** At a few hundred to a few thousand documents, hybrid search with reranking answers types A, B, and most of C well. Graph extraction would add Neptune cost, ingest time, and another moving part.
+1. **The corpus is small and mostly how-to questions.** At a few hundred to a few thousand documents, search with reranking, plus the exact-lookup tool, answers types A, B, and most of C well. Graph extraction would add Neptune cost, ingest time, and another moving part.
 2. **The relationships that matter, lineage and audience→table, are already structured data.** Asking an LLM to re-derive them by entity extraction is a lossy copy of facts we already hold. Two cheaper approaches cover them:
    - **Denormalise them into the entity docs.** Each table doc lists its upstream and downstream sources, and each audience doc lists its source tables. That covers one-hop questions.
    - **For multi-hop questions** ("everything downstream of `consent_current`"), add a **`get_lineage` tool** in phase 1b that queries the lineage store directly. This is deterministic, always current, and can be checked against the user's tier.
@@ -131,6 +156,7 @@ Ask AI orchestrator (Python, Anthropic SDK + boto3)
    ├─ Claude Opus 5.5 on Bedrock (tool-use loop, streaming)
    ├─ Tool: search_product_docs   → bedrock-agent-runtime Retrieve (KB-1)
    ├─ Tool: search_cdl_metadata   → Retrieve (KB-2), tier/brand filter injected server-side
+   ├─ Tool: get_cdl_entity        → exact-name lookup of an exported entity doc in S3, tier-checked
    ├─ (1b) Tool: get_lineage / get_audience / get_segment_status → CDL internal APIs
    ├─ Bedrock Guardrails (PII redaction, denied topics, grounding check)
    ├─ Conversation store (DynamoDB)
@@ -162,7 +188,7 @@ The orchestrator itself is about 300 lines of Python:
 ### 5.3 Tier enforcement (defence in depth)
 
 1. **Index:** the export job never writes withheld fields, and every document carries `allowed_tiers` and `brand`.
-2. **Retrieval:** the orchestrator reads tier and brand **from the verified Cognito JWT** and always adds `{"in": {"key": "allowed_tiers", "value": [tier]}}` plus a brand filter to every `Retrieve` call. The model never controls these filters, and they aren't parameters in the tool schema.
+2. **Retrieval:** the orchestrator reads tier and brand **from the verified Cognito JWT** and always adds `{"listContains": {"key": "allowed_tiers", "value": tier}}` plus a brand filter to every `Retrieve` call. The model never controls these filters, and they aren't parameters in the tool schema. `get_cdl_entity` applies the same check to the doc's sidecar before returning anything. Confirm the chosen vector store supports `listContains`; if it doesn't, use one boolean attribute per tier (`visible_to_agency: true`) with an `equals` filter.
 3. **Prompt:** the system prompt states the user's tier and the withheld-field policy, and tells the model to refuse and explain when asked for something withheld.
 4. **Guardrails:** Bedrock Guardrails on input and output. Sensitive-information filters (PII redaction), denied topics (e.g. "identify a specific person", "export raw data"), and a contextual grounding check.
 5. **Tests:** an automated red-team prompt suite per tier runs in CI (see §7).
@@ -201,7 +227,7 @@ The orchestrator itself is about 300 lines of Python:
 
 ## 7. Evaluation (needed for acceptance)
 
-- **Golden set:** 150–300 real console questions spread across types A–D and all three tiers, each with the expected answer, the expected source docs, and a must-refuse flag. Write it with Product and Governance before tuning starts.
+- **Golden set:** 150–300 real console questions spread across types A–D and all three tiers, each with the expected answer, the expected source docs, and a must-refuse flag. Include identifier-heavy questions (exact table, column and segment names, acronyms); their score decides whether we need hybrid search (§3.2). Write it with Product and Governance before tuning starts.
 - **Metrics:**
   - Retrieval recall@k.
   - Answer correctness: an LLM judge plus human spot checks.
@@ -219,9 +245,8 @@ The orchestrator itself is about 300 lines of Python:
 
 - **Audit log per turn:** caller identity (sub, tier, brand), conversation and message IDs, tools called and their filters, retrieved document IDs, guardrail action, model ID, token usage, and latency. Write it to CloudWatch with Bedrock model-invocation logging on, and export to S3 for Athena. CloudTrail covers Bedrock API calls.
 - **Throttling:** per-user rate limits at API Gateway and a per-tier daily token budget in the orchestrator.
-- **IAM:** the orchestrator role can call `bedrock:InvokeModel*` on the chosen model, `bedrock:Retrieve` on the two KBs, and nothing else.
+- **IAM:** the orchestrator role can call `bedrock:InvokeModel*` on the chosen model, `bedrock:Retrieve` on the two KBs, and `s3:GetObject` on the metadata export prefix (for `get_cdl_entity`), and nothing else.
 - **Cost drivers:**
-  - The OpenSearch Serverless OCU floor.
   - Output tokens. Keep answers concise via the prompt and `effort: low`.
   - Re-sent history, which prompt caching reduces.
 
@@ -242,10 +267,10 @@ These later epic items reuse the phase-1 pieces:
 |---|---|---|---|
 | 1 | Content plan and doc templates. Write the first product docs, glossary, and tier policy (KB-1 corpus) | Product, Governance | ongoing |
 | 2 | Golden eval set and tier red-team set | 1 | 1 wk |
-| 3 | Infra (CDK/Terraform): S3 buckets, OpenSearch Serverless, two Bedrock KBs, Guardrail, DynamoDB, IAM | — | 1 wk |
+| 3 | Infra (CDK/Terraform): S3 buckets, S3 Vectors indexes, two Bedrock KBs, Guardrail, DynamoDB, IAM | — | 1 wk |
 | 4 | Metadata export job (Glue Catalog, lineage, audience defs → S3 docs + sidecars) with field allow-list and tier tagging | NWS1-99 LF-tags | 1–1.5 wk |
 | 5 | KB ingestion pipeline: sync on S3 change and nightly; chunking config per data source | 3, 4 | 3 d |
-| 6 | Orchestrator: Claude tool-use loop, retrieval tools with injected filters, streaming, citations, refusal handling | 3 | 1.5 wk |
+| 6 | Orchestrator: Claude tool-use loop, retrieval tools with injected filters, `get_cdl_entity` exact lookup, streaming, citations, refusal handling | 3, 4 | 1.5 wk |
 | 7 | Conversation store and API (create, list, get, send-streamed, feedback), Cognito authorizer, throttling | 6 | 1 wk |
 | 8 | Guardrails, audit logging, dashboards | 6 | 3 d |
 | 9 | Eval harness in CI. Tune chunking, top-k, prompt, and effort; iterate until the threshold is met | 2, 5, 6 | 1–2 wk |
@@ -262,3 +287,4 @@ These later epic items reuse the phase-1 pieces:
 4. Latency target (e.g. first token < 2 s, p95 full answer < 10 s) and the eval acceptance threshold.
 5. Conversation retention period and whether chat logs count as personal data under NewsCorp policy.
 6. Is "Viewing from" brand a hard data boundary for Ask AI, or can Power Users ask cross-brand questions?
+7. Will the CDL run OpenSearch anyway (NWS1-102 Profile Search)? If it does, and security accepts sharing it, OpenSearch hybrid search becomes cheap enough to use from the start (§3.2).
