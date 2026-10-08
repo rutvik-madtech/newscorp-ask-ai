@@ -6,11 +6,24 @@ Companion to [ASK_AI_PLAN.md](ASK_AI_PLAN.md) §6. This covers how a chat behave
 
 ## 1. Principles
 
-1. **The server owns the conversation.** The browser sends a conversation ID, a client message ID, the question and the current page. It never sends history.
+1. **The Ask AI backend owns the conversation.** The orchestrator loads the history from DynamoDB at the start of every turn and writes the new turn back at the end. The browser sends a conversation ID, a client message ID, the question and the current page. It never sends history.
 2. **History is append-only.** A committed turn is stored exactly as Claude returned it and is never edited. Claude Opus 5.5 checks that the system prompt, the tools and every earlier message are unchanged. Edits break the prompt cache, and on newer accounts the request is rejected.
 3. **Commit or discard.** A turn joins the history only when it completes normally. Stopped, blocked, declined and failed turns are shown to the user and kept in the audit log, but never sent to Claude again.
 4. **One conversation, one context.** A conversation is bound to the user, tier, brand and prompt version it started with.
 5. **Generally available features only in phase 1.** Long chats are handled with a cap and a carried-over summary, not with beta compaction.
+
+### Where conversation data lives
+
+Everything below runs in NewsCorp's AWS account.
+
+| Component | Holds the history? |
+|---|---|
+| Browser (CDL console) | No. It shows what the API returns and keeps only the conversation ID |
+| API Gateway | No. It passes requests through |
+| Orchestrator (AgentCore Runtime or Lambda) | Only while a turn runs. It reloads from DynamoDB on every turn, so any instance can serve any turn and a restart loses nothing. AgentCore keeps a session's process alive between turns, but we don't rely on that memory |
+| **DynamoDB table, plus S3 for large turns** | **Yes. This is the conversation store** |
+| Claude on Bedrock | No. It receives the full history on every call and keeps nothing. The prompt cache is a 5-minute speed-up, not storage. If it has expired, the request still works because the full history is always sent |
+| Audit log, and Bedrock invocation logs if enabled | Copies for audit only, never used to rebuild a chat. Their retention has to match the chat retention (open question 1) |
 
 ---
 

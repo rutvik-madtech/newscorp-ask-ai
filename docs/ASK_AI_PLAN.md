@@ -201,7 +201,7 @@ The full design is in [ASK_AI_CONVERSATION.md](ASK_AI_CONVERSATION.md): lifecycl
 
 ### 6.1 Rules
 
-- **The server owns the conversation.** The browser sends a conversation ID, a client message ID, the question and the current page, never history. Client-supplied history could inject fake assistant turns or bypass tier rules.
+- **The Ask AI backend owns the conversation.** History lives in the DynamoDB table (S3 for large turns). The orchestrator reloads it on every turn and writes each new turn back. The browser sends a conversation ID, a client message ID, the question and the current page, never history. Client-supplied history could inject fake assistant turns or bypass tier rules.
 - **Append-only history.** Each committed turn is stored **exactly as returned**: thinking, tool calls, tool results and text. Opus 5.5 checks that the system prompt, tools and earlier messages are unchanged. Edits break the prompt cache, and on newer accounts the request is rejected.
 - **Commit or discard.** Only turns that end normally join the history. Stopped, blocked, declined and failed turns are shown with their status and kept in the audit log, but never replayed to Claude.
 - **Pinned prompt bundle.** Each conversation keeps the system prompt and tool definitions it started with (`prompts/vN/`). New conversations get the newest version. A security fix or a tier-policy change closes open conversations instead.
