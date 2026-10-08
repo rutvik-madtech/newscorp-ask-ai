@@ -197,32 +197,39 @@ The orchestrator itself is about 300 lines of Python:
 
 ## 6. How conversation works
 
-### 6.1 Conversation model
+The full design is in [ASK_AI_CONVERSATION.md](ASK_AI_CONVERSATION.md): lifecycle, the turn pipeline, request assembly, caching, long chats, edge cases, data model and Claude's behaviour rules. This section summarises it.
 
-- The server creates a `conversation_id`, owned by the user. The frontend sends only `{conversation_id, message}`.
-- **The server is the source of truth for history.** We never accept history from the client. A client-supplied history could inject fake assistant turns or bypass tier rules.
-- **DynamoDB table `askai_conversations`:**
-  - `PK = USER#<sub>`, `SK = CONV#<conversation_id>`: title, created and updated times, tier and brand at creation, turn count.
-  - `PK = CONV#<conversation_id>`, `SK = TURN#<seq>`: the **full Messages-API content blocks** for that turn (user text; assistant thinking, tool_use and text blocks; tool_result blocks), plus citations, latency, token usage, guardrail outcome, and feedback.
-  - TTL (e.g. 30–90 days, agreed with privacy) and KMS encryption. If a turn exceeds DynamoDB's 400 KB item limit, store large tool results in S3 and save a pointer.
-  - On AgentCore, AgentCore Memory (short-term events) can replace this table. The rules below still apply.
+### 6.1 Rules
 
-### 6.2 Multi-turn mechanics
-
-- **Append-only history.** Each turn appends the assistant's content **exactly as returned**, including thinking and tool blocks. Opus 5.5 ties thinking blocks to the conversation, so editing, reordering, or partially stripping earlier turns causes 400 errors and loses reasoning. Don't trim old turns by hand.
-- **Follow-ups work because the model writes the search query.** It sees the whole conversation and calls `search_cdl_metadata(query="Agency tier visibility of overlap metrics")`, so we need no separate query-rewriting step.
+- **The server owns the conversation.** The browser sends a conversation ID, a client message ID, the question and the current page, never history. Client-supplied history could inject fake assistant turns or bypass tier rules.
+- **Append-only history.** Each committed turn is stored **exactly as returned**: thinking, tool calls, tool results and text. Opus 5.5 checks that the system prompt, tools and earlier messages are unchanged. Edits break the prompt cache, and on newer accounts the request is rejected.
+- **Commit or discard.** Only turns that end normally join the history. Stopped, blocked, declined and failed turns are shown with their status and kept in the audit log, but never replayed to Claude.
+- **Pinned prompt bundle.** Each conversation keeps the system prompt and tool definitions it started with (`prompts/vN/`). New conversations get the newest version. A security fix or a tier-policy change closes open conversations instead.
+- **One context per conversation.** Owner, tier and brand are fixed at creation. A mismatch returns `409 context_changed` and the UI starts a new chat, so a "Viewing from" switch never carries answers across brands.
+- **Follow-ups work because the model writes the search query.** It sees the whole conversation and calls, for example, `search_cdl_metadata(query="Agency tier visibility of overlap metrics")`, so no separate query-rewriting step is needed.
 - **Risk of this pattern: Claude answers without searching.** The system prompt requires a search before any product or metadata answer, and the eval (§7) checks that every such answer cites a retrieved source.
-- **Bounded context:**
-  - Prompt caching keeps re-sending history cheap.
-  - **Compaction** (beta on Bedrock) summarises older history server-side once it passes a threshold. We persist the compaction block it returns, as the API requires.
-  - Hard caps (e.g. 30 turns or a token ceiling) end with a prompt in the UI to start a new chat.
-- **Changing tier or brand mid-chat:** if the user's tier or brand at request time differs from what the conversation was created with, start a new conversation. This stops a "Viewing from" switch from carrying earlier answers across brands.
 
-### 6.3 Frontend contract
+### 6.2 Turn pipeline
 
-- Streamed events: `text_delta`, `citation` (doc title, URL or console deep link, snippet), `status` (e.g. "Searching metadata…", driven by tool calls), `done` (message_id, usage), and `error`.
-- Show sources under every answer, thumbs up/down feedback, a "New chat" button, a conversation list, and a stop button that cancels generation.
-- Suggested starter questions per pillar, so users know what Ask AI can answer.
+**Accept** (claims match, conversation lock, idempotency key) → **Screen** (Guardrails masks PII and checks denied topics) → **Build** (pinned bundle, committed turns, page context and question) → **Run** (Claude tool loop, at most 4 rounds and 90 s, streamed through Guardrails) → **Commit** (one DynamoDB transaction appends the turn and releases the lock).
+
+### 6.3 Long chats
+
+- Prompt caching keeps re-sending history cheap. Cache point 1 sits after the static system prompt and is shared by all conversations. Cache point 2 is automatic and sits at the end of each request.
+- **Cap:** 30 turns or 200k tokens of context, then **Continue in a new chat**, which carries a Claude-written summary over. This uses only generally available features.
+- Server-side compaction (beta on Bedrock) is a later option.
+
+### 6.4 Storage and frontend contract
+
+- **DynamoDB, one table:**
+  - Conversation `META` items, turn items with a status and gzip `replay` content (S3 when over 300 KB), and idempotency items.
+  - A GSI lists a user's chats for their current tier and brand.
+  - KMS encryption and a 30–90 day TTL.
+- **SSE events:** `turn.accepted`, `status`, `text.delta`, `citation`, `turn.completed`, `turn.ended`.
+- **UI:**
+  - Sources under every answer.
+  - Stop, Regenerate (last answer only), thumbs up/down.
+  - A conversation list, New chat, and starter questions per page.
 
 ---
 
