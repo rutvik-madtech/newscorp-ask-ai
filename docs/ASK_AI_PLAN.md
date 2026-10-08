@@ -169,7 +169,7 @@ We don't use the managed agent or generation APIs. We use the KB **`Retrieve`** 
 
 | Option | Verdict |
 |---|---|
-| KB `RetrieveAndGenerate` | ❌ We'd lose control of the prompt, tier injection, citation format, and how history is handled. It searches with the raw user message, so it handles follow-ups badly |
+| KB `RetrieveAndGenerate` with `sessionId` | ❌ It does handle multi-turn chat and accepts metadata filters. But Bedrock holds the history in sessions that expire after 24 hours, so we couldn't list or resume chats, set our own retention, or audit the exact context. It can't call our own tools (exact lookup, lineage, live data), and its prompt and citation format are only partly customisable |
 | Classic Bedrock Agents | ❌ Opaque orchestration prompt, harder to test, and model features lag behind |
 | **Own loop: Claude + `Retrieve` as tools** | ✅ Full control. The model writes its own search query from the conversation, so follow-ups like "and for the Agency tier?" work. We can enforce filters in code, it's testable, and it extends to live-data tools and later to MCP |
 
@@ -211,6 +211,7 @@ The orchestrator itself is about 300 lines of Python:
 
 - **Append-only history.** Each turn appends the assistant's content **exactly as returned**, including thinking and tool blocks. Opus 5.5 ties thinking blocks to the conversation, so editing, reordering, or partially stripping earlier turns causes 400 errors and loses reasoning. Don't trim old turns by hand.
 - **Follow-ups work because the model writes the search query.** It sees the whole conversation and calls `search_cdl_metadata(query="Agency tier visibility of overlap metrics")`, so we need no separate query-rewriting step.
+- **Risk of this pattern: Claude answers without searching.** The system prompt requires a search before any product or metadata answer, and the eval (§7) checks that every such answer cites a retrieved source.
 - **Bounded context:**
   - Prompt caching keeps re-sending history cheap.
   - **Compaction** (beta on Bedrock) summarises older history server-side once it passes a threshold. We persist the compaction block it returns, as the API requires.
