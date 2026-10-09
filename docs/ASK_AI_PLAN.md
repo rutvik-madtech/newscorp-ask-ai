@@ -405,25 +405,26 @@ sequenceDiagram
 
 | # | Story | Depends on | Est. |
 |---|---|---|---|
-| 1 | Content plan and doc template (with the "Applies to tier:" line). Write the first product docs, glossary and tier policy | Product, Governance | ongoing |
-| 2 | Golden eval set (types A–B plus decline cases) and tier red-team set | 1 | 1 wk |
-| 3 | Infra (CDK/Terraform): S3 source bucket, S3 Vectors index, product docs KB, Guardrail, IAM | — | 1 wk |
-| 4 | Docs publish job: Git or Confluence → S3 Markdown with tier sidecars, then KB sync, on merge and nightly | 1, 3 | 3–5 d |
-| 5 | Orchestrator answer flow: Claude tool-use loop with `search_product_docs`, injected filters, streaming, citations, refusal handling | 3 | 1–1.5 wk |
-| 6 | Answer API and feedback endpoint, Cognito authorizer, throttling | 5 | 3–5 d |
-| 7 | Guardrails, audit logging, dashboards | 5 | 3 d |
-| 8 | Eval harness in CI. Tune chunking, top-k, prompt and effort; iterate until the threshold is met | 2, 4, 5 | 1–2 wk |
-| 9 | Ask AI panel in the CDL UI (replace the mock) | 6, NWS1-102 | 1 wk |
+| 1 | Pre-build AWS spike: region and data residency, Bedrock model access, AgentCore approval, S3 Vectors limits and `listContains` filter support | — | 2–3 d |
+| 2 | Content plan and doc template (with the "Applies to tier:" line). Write the first product docs, glossary and tier policy | Product, Governance | ongoing |
+| 3 | Golden eval set (types A–B plus decline cases) and tier red-team set | 2 | 1 wk |
+| 4 | Infra (CDK/Terraform): S3 source bucket, S3 Vectors index, product docs KB, Guardrail, IAM | 1 | 1 wk |
+| 5 | Docs publish job: Git or Confluence → S3 Markdown with tier sidecars, then KB sync, on merge and nightly | 2, 4 | 3–5 d |
+| 6 | Orchestrator answer flow: Claude tool-use loop with `search_product_docs`, injected filters, streaming, citations, refusal handling | 4 | 1–1.5 wk |
+| 7 | Answer API and feedback endpoint, Cognito authorizer, throttling | 6 | 3–5 d |
+| 8 | Guardrails, audit logging, dashboards | 6 | 3 d |
+| 9 | Eval harness in CI. Tune chunking, top-k, prompt and effort; iterate until the threshold is met | 3, 5, 6 | 1–2 wk |
+| 10 | Ask AI panel in the CDL UI (replace the mock) | 7, NWS1-102 | 1 wk |
 
 **Phase 2**
 
 | # | Story | Depends on | Est. |
 |---|---|---|---|
-| 10 | Conversation store and API (create, list, get, send-streamed), with lock, idempotency and commit-or-discard | Phase 1 | 1–1.5 wk |
-| 11 | Pinned prompt bundles and history caching | 10 | 3 d |
-| 12 | Long-chat cap and carried-over summary | 10 | 3 d |
-| 13 | Chat UI: conversation list, Regenerate, Continue in a new chat | 10, 12 | 1 wk |
-| 14 | Multi-turn eval scripts and red-team escalation cases | 10 | 3–5 d |
+| 11 | Conversation store and API (create, list, get, send-streamed), with lock, idempotency and commit-or-discard | Phase 1 | 1–1.5 wk |
+| 12 | Pinned prompt bundles and history caching | 11 | 3 d |
+| 13 | Long-chat cap and carried-over summary | 11 | 3 d |
+| 14 | Chat UI: conversation list, Regenerate, Continue in a new chat | 11, 13 | 1 wk |
+| 15 | Multi-turn eval scripts and red-team escalation cases | 11 | 3–5 d |
 
 ---
 
