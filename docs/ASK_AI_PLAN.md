@@ -149,7 +149,7 @@ GraphRAG (Bedrock KB on Neptune Analytics) builds a graph of entities and relati
 flowchart LR
   subgraph REQ["At request time"]
     UI["CDL console<br/>Ask AI panel"] -->|question + JWT| GW["API Gateway<br/>Cognito authorizer, throttling"]
-    GW -->|question, tier, brand, page| ORCH["Ask AI orchestrator<br/>AgentCore Runtime or Lambda<br/>tool: search_product_docs"]
+    GW -->|question, tier, brand, page| ORCH["Ask AI orchestrator<br/>AWS Lambda, response streaming<br/>tool: search_product_docs"]
     ORCH -->|messages + tools, streamed| CLAUDE["Claude Opus 5.5<br/>Amazon Bedrock"]
     ORCH -->|screen question and answer| GR["Bedrock Guardrails"]
     ORCH -->|Retrieve + tier and brand filter| KB["Bedrock Knowledge Base<br/>product docs"]
@@ -250,10 +250,15 @@ The orchestrator itself is a few hundred lines of Python:
 4. Feed the results back and stream the final text.
 5. Write the audit record.
 
-### 5.5 Hosting
+### 5.5 Hosting: AWS Lambda
 
-- **Preferred: Bedrock AgentCore Runtime.** It provides per-session isolation and streaming, and it suits phase 2's longer sessions. Confirm it is approved for the NewsCorp account and region.
-- **Fallback: Lambda with response streaming** behind API Gateway (REST API response streaming), or a Function URL behind CloudFront. Same code; only the entry point changes.
+- **Phase 1 runs on AWS Lambda with response streaming.** Each question is one stateless request, which suits Lambda:
+  - it scales per request and costs nothing when idle;
+  - the 90-second answer budget is well inside Lambda's 15-minute limit;
+  - Lambda is well understood and very likely already approved in NewsCorp's AWS accounts.
+- **Entry point:** API Gateway with REST API response streaming, so the Cognito authorizer and usage plans work as they do for the rest of the console API. A Lambda function URL behind CloudFront is the alternative.
+- **Cold starts:** add a small amount of provisioned concurrency if they show up in p95 latency.
+- **Phase 2 reviews hosting (§6).** Conversations may benefit from AgentCore Runtime's per-session isolation and long sessions, if NewsCorp approves the service and it's available in the target region. The orchestrator code is the same on both; only the entry point changes.
 
 ---
 
@@ -269,6 +274,7 @@ Phase 2 keeps the phase 1 answer flow and adds a conversation around it: follow-
 - **A second cache point** covering the history.
 - **A cap on long chats** with a carried-over summary.
 - **UI:** a chat list, Regenerate, and Continue in a new chat.
+- **A hosting review:** stay on Lambda, or move the orchestrator to AgentCore Runtime for per-session isolation and long sessions, if NewsCorp approves it and it's available in the region.
 
 ### 6.1 Architecture
 
@@ -405,10 +411,10 @@ sequenceDiagram
 
 | # | Story | Depends on | Est. |
 |---|---|---|---|
-| 1 | Pre-build AWS spike: region and data residency, Bedrock model access, AgentCore approval, S3 Vectors limits and `listContains` filter support | — | 2–3 d |
+| 1 | Pre-build AWS spike: region and data residency, Bedrock model access, S3 Vectors limits and `listContains` filter support | — | 2–3 d |
 | 2 | Content plan and doc template (with the "Applies to tier:" line). Write the first product docs, glossary and tier policy | Product, Governance | ongoing |
 | 3 | Golden eval set (types A–B plus decline cases) and tier red-team set | 2 | 1 wk |
-| 4 | Infra (CDK/Terraform): S3 source bucket, S3 Vectors index, product docs KB, Guardrail, IAM | 1 | 1 wk |
+| 4 | Infra (CDK/Terraform): Lambda and API Gateway with response streaming, S3 source bucket, S3 Vectors index, product docs KB, Guardrail, IAM | 1 | 1 wk |
 | 5 | Docs publish job: Git or Confluence → S3 Markdown with tier sidecars, then KB sync, on merge and nightly | 2, 4 | 3–5 d |
 | 6 | Orchestrator answer flow: Claude tool-use loop with `search_product_docs`, injected filters, streaming, citations, refusal handling | 4 | 1–1.5 wk |
 | 7 | Answer API and feedback endpoint, Cognito authorizer, throttling | 6 | 3–5 d |
@@ -420,11 +426,12 @@ sequenceDiagram
 
 | # | Story | Depends on | Est. |
 |---|---|---|---|
-| 11 | Conversation store and API (create, list, get, send-streamed), with lock, idempotency and commit-or-discard | Phase 1 | 1–1.5 wk |
-| 12 | Pinned prompt bundles and history caching | 11 | 3 d |
-| 13 | Long-chat cap and carried-over summary | 11 | 3 d |
-| 14 | Chat UI: conversation list, Regenerate, Continue in a new chat | 11, 13 | 1 wk |
-| 15 | Multi-turn eval scripts and red-team escalation cases | 11 | 3–5 d |
+| 11 | Hosting review: stay on Lambda or move to AgentCore Runtime (NewsCorp approval, region, quotas) | Phase 1 | 2–3 d |
+| 12 | Conversation store and API (create, list, get, send-streamed), with lock, idempotency and commit-or-discard | 11 | 1–1.5 wk |
+| 13 | Pinned prompt bundles and history caching | 12 | 3 d |
+| 14 | Long-chat cap and carried-over summary | 12 | 3 d |
+| 15 | Chat UI: conversation list, Regenerate, Continue in a new chat | 12, 14 | 1 wk |
+| 16 | Multi-turn eval scripts and red-team escalation cases | 12 | 3–5 d |
 
 ---
 
@@ -433,7 +440,7 @@ sequenceDiagram
 **Phase 1**
 1. Who writes and owns the product documentation, and does any of it exist today?
 2. Where will the docs live (Git or a Confluence space), and who sets each page's "Applies to tier:" line?
-3. AWS region(s) and data residency per brand. Are Bedrock model access, AgentCore and S3 Vectors available there?
+3. AWS region(s) and data residency per brand. Are Bedrock model access and S3 Vectors available there?
 4. Latency target (e.g. first token < 2 s, p95 full answer < 10 s) and the eval acceptance threshold.
 5. Should audit records keep the question and answer text, and for how long?
 6. Should the panel send page context from the first release?
@@ -441,3 +448,4 @@ sequenceDiagram
 **Phase 2**
 - Conversation retention period, and whether chat logs count as personal data under NewsCorp policy.
 - Are the long-chat cap values (30 turns, 200k tokens) right? Revisit after the pilot.
+- If phase 2 moves to AgentCore Runtime, is it approved in NewsCorp's accounts and available in the target region?

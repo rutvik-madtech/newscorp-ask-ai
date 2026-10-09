@@ -10,6 +10,7 @@ Companion to [ASK_AI_PLAN.md](ASK_AI_PLAN.md) §6.
 - **The request gains the history.** Prompt bundles are pinned per conversation, and a second cache point covers the history.
 - **New endpoints** replace phase 1's single answer endpoint: create, list and get conversations, send a message (streamed) and feedback.
 - **The panel gains** a conversation list, Regenerate, and Continue in a new chat.
+- **Hosting is reviewed.** Phase 1 runs on Lambda. Phase 2 may move the orchestrator to AgentCore Runtime for per-session isolation and long sessions, if NewsCorp approves it and it's available in the region.
 
 ---
 
@@ -29,7 +30,7 @@ Everything below runs in NewsCorp's AWS account.
 |---|---|
 | Browser (CDL console) | No. It shows what the API returns and keeps only the conversation ID |
 | API Gateway | No. It passes requests through |
-| Orchestrator (AgentCore Runtime or Lambda) | Only while a turn runs. It reloads from DynamoDB on every turn, so any instance can serve any turn and a restart loses nothing. AgentCore keeps a session's process alive between turns, but we don't rely on that memory |
+| Orchestrator (Lambda, or AgentCore Runtime if phase 2 adopts it) | Only while a turn runs. It reloads from DynamoDB on every turn, so any instance can serve any turn and a restart loses nothing. AgentCore, if adopted, keeps a session's process alive between turns, but we don't rely on that memory |
 | **DynamoDB table, plus S3 for large turns** | **Yes. This is the conversation store** |
 | Claude on Bedrock | No. It receives the full history on every call and keeps nothing. The prompt cache is a 5-minute speed-up, not storage. If it has expired, the request still works because the full history is always sent |
 | Audit log, and Bedrock invocation logs if enabled | Copies for audit only, never used to rebuild a chat. Their retention has to match the chat retention (open question 1) |
@@ -166,7 +167,7 @@ Rough figures for one turn, to be replaced with pilot measurements:
 
 - **What grows with chat length is Claude reading a longer request, not the database load.** Prompt caching keeps that fast: the earlier conversation is read from cache instead of being processed again. The 30-turn / 200k-token cap bounds it.
 - **Optional later: a version-checked session cache.**
-  - The orchestrator keeps the last loaded turns in AgentCore session memory, keyed by conversation ID and turn count.
+  - The orchestrator keeps the last loaded turns in memory (an AgentCore session, or a warm Lambda instance), keyed by conversation ID and turn count.
   - The lock write already returns the current turn count. If it matches the cached count, the query is skipped.
   - DynamoDB stays the source of truth. A restart, another instance or another tab just means one normal load.
   - Add this only if the load ever shows up in p95 latency.
