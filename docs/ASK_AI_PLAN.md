@@ -146,6 +146,29 @@ GraphRAG (Bedrock KB on Neptune Analytics) builds a graph of entities and relati
 - **Cheaper or faster models (Sonnet 5.5, Haiku 5.5):** run them against the same eval set. Switch only if Opus 5.5 at `low` effort misses the latency target, and only after the cost and quality trade-off is measured and signed off.
 - **Before build:** confirm model access and the region (or a cross-region inference profile) in the NewsCorp AWS account. Data residency (AU / US / UK brands) may constrain the region choice.
 
+### 4.1 Which model runs where
+
+Claude doesn't run the search itself. It works before the search (deciding what to look for) and after it (writing the answer). The search uses two smaller models configured on the Knowledge Base.
+
+| When | Model | What it does |
+|---|---|---|
+| Publishing, each time docs change | **Amazon Titan Text Embeddings V2** | Turns each 300–500-token chunk into a vector (1,024 numbers) stored in S3 Vectors |
+| Each question: deciding what to search | **Claude Opus 5.5** | Reads the instructions and the question, then calls `search_product_docs` with its own search words |
+| Each search: understanding the search words | **Titan Text Embeddings V2**, the same model, configured on the KB | Turns the search words into a vector |
+| Each search: finding matches | **No model.** S3 Vectors similarity search | Finds the closest chunks, considering only those tagged for the user's tier and business unit |
+| Each search: picking the best | **Amazon Rerank** or **Cohere Rerank** | Re-scores the ~20 candidates against the search words and keeps the best 5–8 |
+| Each question: answering | **Claude Opus 5.5** | Writes the answer from those passages, following the instructions, with citations |
+| Each question: screening | **Bedrock Guardrails** (managed classifiers, not a chat model) | Checks the question and the answer for PII and denied topics |
+
+- **Who calls what:**
+  - Ask AI's code calls `Retrieve` and adds the filters.
+  - The Knowledge Base calls Titan for the search words, searches S3 Vectors, and calls the reranker named in the `Retrieve` request.
+  - Claude only ever sees the final passages, as text.
+- **The embedding model is set once on the Knowledge Base** and must stay the same: changing it means re-indexing all the docs.
+- **Cost:** per question, Claude runs at least twice: once to decide what to search and once to answer, plus once for each extra round of searching. Titan and the reranker run once per search. Embedding and reranking cost fractions of a cent per search, so nearly all model cost is Claude.
+- **One more model at publishing time:** if PDFs or decks go through Bedrock Data Automation or the foundation-model parser (§3.1), that parser is a model too.
+- **Phase 2 uses the same models.** Claude also reads the conversation history.
+
 ---
 
 ## 5. Phase 1 architecture: answer one question
