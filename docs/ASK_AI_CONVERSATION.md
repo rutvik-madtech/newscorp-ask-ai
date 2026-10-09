@@ -69,7 +69,7 @@ A conversation is listed and opened only when its tier matches the user's curren
 
 ### 4.1 Accept
 
-1. Read `sub`, tier and brand from the verified JWT (API Gateway's Cognito authorizer has already validated it).
+1. Read `sub` and tier from the verified JWT (API Gateway's Cognito authorizer has already validated it). Check the brand being viewed, which arrives with the request, against the brands the user may view.
 2. Load the conversation's `META` item. Reject with `409 context_changed` if the owner or tier doesn't match, and with `409 closed` if it is capped or closed. The UI reacts by starting a new chat.
 3. Take the conversation lock with a conditional write: no lock held, or the held lock has expired. If the lock is taken, reject with `409 busy`.
 4. Write the idempotency item `IDEMP#<client_message_id>` (condition: doesn't exist). On a retried send, return the existing turn instead: replay the stored answer if it is committed, or return `409 busy` if it is still pending.
@@ -96,7 +96,7 @@ thinking: { type: adaptive }   output_config: { effort: low }   max_tokens: 1600
 
 - **Prompt bundles are versioned and pinned.** `prompts/vN/` holds the system prompt and the tool definitions, serialised deterministically. The conversation stores its version and uses it for its whole life, because changing either would invalidate the history. New conversations get the newest version. Old versions are kept, since they are small files.
 - **The tier goes in a system block,** so it carries operator authority. It comes from the JWT, never from user text.
-- **The brand being viewed travels with each question**, in the page context block, because it can change mid-chat.
+- **The brand being viewed travels with each question**, in the page context block, after the check against the brands the user may view. It travels per question because it can change mid-chat.
 - **Page context goes in the user message.** The browser sends a page ID; the server checks it against an allow-list and renders the text itself, for example `Activate › Segments › Sports Enthusiasts AU`. A page or entity the tier can't see is dropped.
 - **No timestamps or other per-request values in `system`.** They would break the cache and the history check.
 

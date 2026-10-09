@@ -163,7 +163,7 @@ flowchart LR
   SRC -->|ingest| KB
 ```
 
-- **API:** `POST /ask-ai/answers` (question and page ID, streamed response) and `POST /ask-ai/answers/{id}/feedback`. API Gateway's Cognito authorizer validates the JWT, and usage plans throttle per user.
+- **API:** `POST /ask-ai/answers` (question and page ID, streamed response) and `POST /ask-ai/answers/{id}/feedback`. API Gateway's Cognito authorizer validates the login token on every request. Throttling is described in §8.
 - **No conversation store.** The orchestrator keeps nothing between questions. The only thing written per answer is the audit record. Feedback arrives later as a separate event in the same audit stream, joined to the answer by its ID.
 
 ### 5.2 Answer flow
@@ -194,7 +194,7 @@ sequenceDiagram
   O->>L: audit record
 ```
 
-1. **Verify.** API Gateway validates the JWT. The orchestrator reads `sub`, tier and brand from its claims, never from the request body.
+1. **Verify.** API Gateway validates the JWT. The orchestrator reads the user ID (`sub`) and tier (the user's Cognito group) from its claims, never from the request body. The brand being viewed arrives with the request and is checked against the brands the user may view.
 2. **Screen the question** with `ApplyGuardrail`. Sensitive information is masked, and a denied topic ends the request with a standard message.
 3. **Build the request.**
    - The static system prompt and the tool definitions come first, with a cache point after them that every user shares.
@@ -221,7 +221,7 @@ sequenceDiagram
 ### 5.3 Tier enforcement (defence in depth)
 
 1. **Doc tags:** every page carries `allowed_tiers`. A page without a tier line gets the internal tiers only.
-2. **Retrieval:** the orchestrator reads tier and brand **from the verified Cognito JWT** and adds two filters to every `Retrieve` call:
+2. **Retrieval:** the orchestrator takes the tier **from the verified Cognito JWT** and checks the requested brand against the brands the user may view. It then adds two filters to every `Retrieve` call:
    - `{"listContains": {"key": "allowed_tiers", "value": tier}}`;
    - a brand filter matching the brand being viewed or `all`.
 
@@ -256,7 +256,7 @@ The orchestrator itself is a few hundred lines of Python:
   - it scales per request and costs nothing when idle;
   - the 90-second answer budget is well inside Lambda's 15-minute limit;
   - Lambda is well understood and very likely already approved in NewsCorp's AWS accounts.
-- **Entry point:** API Gateway with REST API response streaming, so the Cognito authorizer and usage plans work as they do for the rest of the console API. A Lambda function URL behind CloudFront is the alternative.
+- **Entry point:** API Gateway with REST API response streaming, so the Cognito authorizer and throttling work as they do for the rest of the console API. A Lambda function URL behind CloudFront is the alternative.
 - **Cold starts:** add a small amount of provisioned concurrency if they show up in p95 latency.
 - **Phase 2 reviews hosting (§6).** Conversations may benefit from AgentCore Runtime's per-session isolation and long sessions, if NewsCorp approves the service and it's available in the target region. The orchestrator code is the same on both; only the entry point changes.
 
@@ -395,7 +395,11 @@ sequenceDiagram
   - tools called with their filters, and the retrieved document IDs;
   - guardrail action, model ID, token usage and latency.
 - **Feedback events** go to the same stream, keyed by answer ID.
-- **Throttling:** per-user rate limits at API Gateway and a per-tier daily token budget in the orchestrator.
+- **Throttling** (limits on how often Ask AI can be called):
+  - API Gateway caps the total request rate for the API, which protects Bedrock quotas and cost.
+  - An AWS WAF rate-based rule, keyed on the caller's token, limits each user to a set number of questions per minute. API Gateway usage plans can't do this per user, because they count requests by API key.
+  - CloudWatch alarms on Bedrock token usage catch unexpected spend.
+  - Phase 2 adds a per-tier daily token budget, counted in the DynamoDB table.
 - **IAM:**
   - Phase 1: the orchestrator role can call `bedrock:InvokeModel*` on the chosen model, `bedrock:Retrieve` on the product docs KB and `bedrock:ApplyGuardrail` on the guardrail, and write to its own log group. Nothing else.
   - Phase 2 adds read and write on the conversation table and its S3 prefix.
@@ -444,6 +448,7 @@ sequenceDiagram
 4. Latency target (e.g. first token < 2 s, p95 full answer < 10 s) and the eval acceptance threshold.
 5. Should audit records keep the question and answer text, and for how long?
 6. Should the panel send page context from the first release?
+7. How does the console pass the "Viewing from" brand, and where can Ask AI check which brands a user may view: a Cognito attribute or an NWS1-102 API?
 
 **Phase 2**
 - Conversation retention period, and whether chat logs count as personal data under NewsCorp policy.
