@@ -61,7 +61,7 @@ Ask AI uses **one Bedrock Knowledge Base** over the product documentation.
 
 ### 2.1 Publishing the docs
 
-A **publish job** (CI on merge, plus nightly) does four things:
+A **publish job** runs in CI on merge, and can also be run by hand (for example after Confluence edits, if the docs live there). Each run does four things:
 1. Converts each page to Markdown in the S3 source bucket.
 2. Writes a `.metadata.json` sidecar for the page. Bedrock KB ingests it as filterable attributes:
 
@@ -186,7 +186,7 @@ flowchart LR
     ASK -->|audit record, feedback| LOG["CloudWatch to S3<br/>audit log"]
   end
   KB <-->|write and query| VEC["S3 Vectors<br/>Titan v2 embeddings"]
-  subgraph PUB["Publishing: on merge and nightly"]
+  subgraph PUB["Publishing: on merge or by hand"]
     DOCS["Product docs<br/>Confluence or Git"] -->|pages| JOB["Publish job<br/>tier tag per page"]
     JOB -->|Markdown + sidecars| SRC["S3 source bucket"]
   end
@@ -333,7 +333,7 @@ flowchart LR
     ASK -->|audit record, feedback| LOG["CloudWatch to S3<br/>audit log"]
   end
   KB <-->|write and query| VEC["S3 Vectors<br/>Titan v2 embeddings"]
-  subgraph PUB["Publishing: on merge and nightly"]
+  subgraph PUB["Publishing: on merge or by hand"]
     DOCS["Product docs<br/>Confluence or Git"] -->|pages| JOB["Publish job<br/>tier tag per page"]
     JOB -->|Markdown + sidecars| SRC["S3 source bucket"]
   end
@@ -464,7 +464,7 @@ sequenceDiagram
 | 2 | Content plan and doc template (with the "Applies to tier:" line). Write the first product docs, glossary and tier policy | Product, Governance | ongoing |
 | 3 | Golden eval set (types A–B plus decline cases) and tier red-team set | 2 | 1 wk |
 | 4 | Infra (CDK/Terraform): private Ask AI Lambda with response streaming, S3 source bucket, S3 Vectors index, product docs KB, Guardrail, IAM | 1 | 1 wk |
-| 5 | Docs publish job: Git or Confluence → S3 Markdown with tier sidecars, then KB sync, on merge and nightly | 2, 4 | 3–5 d |
+| 5 | Docs publish job: Git or Confluence → S3 Markdown with tier sidecars, then KB sync. Runs on merge or by hand | 2, 4 | 3–5 d |
 | 6 | Ask AI answer flow: Claude tool-use loop with `search_product_docs`, injected filters, streaming, citations, refusal handling | 4 | 1–1.5 wk |
 | 7 | Portal backend routes: `/api/ask-ai/answers` and feedback, using the existing session and business unit checks; IAM invoke of the Ask AI Lambda, stream relay, per-user limit | 6, portal backend team | 3–5 d |
 | 8 | Guardrails, audit logging, dashboards | 6 | 3 d |
