@@ -29,7 +29,7 @@ Everything below runs in NewsCorp's AWS account.
 | Component | Holds the history? |
 |---|---|
 | Browser (CDL console) | No. It shows what the API returns and keeps only the conversation ID |
-| API Gateway | No. It passes requests through |
+| CDL portal backend | No. It checks the session cookie and business unit, then passes the request to Ask AI |
 | Orchestrator (Lambda, or AgentCore Runtime if phase 2 adopts it) | Only while a turn runs. It reloads from DynamoDB on every turn, so any instance can serve any turn and a restart loses nothing. AgentCore, if adopted, keeps a session's process alive between turns, but we don't rely on that memory |
 | **DynamoDB table, plus S3 for large turns** | **Yes. This is the conversation store** |
 | Claude on Bedrock | No. It receives the full history on every call and keeps nothing. The prompt cache is a 5-minute speed-up, not storage. If it has expired, the request still works because the full history is always sent |
@@ -46,7 +46,7 @@ Everything below runs in NewsCorp's AWS account.
 - Questions about specific tables, columns, segments or live numbers get a clear "not available in Ask AI" with a link to the right console page, never a guess.
 - Controls: **Stop**, **Regenerate** (last answer only), thumbs up/down, copy.
 - A conversation list shows the user's chats for their current tier. Any chat can be reopened until it expires.
-- **New chat** starts fresh. Switching "Viewing from" to another brand keeps the chat going, and later searches use the new brand.
+- **New chat** starts fresh. Switching business unit keeps the chat going, and later searches use the new business unit.
 - Starter questions depend on the console page the user is on.
 
 ---
@@ -61,7 +61,7 @@ Everything below runs in NewsCorp's AWS account.
 | **Closed** | A security fix to the prompt, or a change to what a tier may see | Nothing. It drops out of the list, because it may hold content the new rules withhold |
 | **Deleted** | The user deletes it, or the retention TTL expires | Gone from the store. The audit log keeps metadata only (open question 1) |
 
-A conversation is listed and opened only when its tier matches the user's current JWT claims. A user moved to a lower tier can no longer open chats from their old tier.
+A conversation is listed and opened only when its tier matches the user's current portal role. A user moved to a lower tier can no longer open chats from their old tier.
 
 ---
 
@@ -69,7 +69,7 @@ A conversation is listed and opened only when its tier matches the user's curren
 
 ### 4.1 Accept
 
-1. Read `sub` and tier from the verified JWT (API Gateway's Cognito authorizer has already validated it). Check the brand being viewed, which arrives with the request, against the brands the user may view.
+1. Take the user, role (tier) and business unit from the portal backend. It has already validated the `session_id` cookie and checked that the business unit is one of the user's.
 2. Load the conversation's `META` item. Reject with `409 context_changed` if the owner or tier doesn't match, and with `409 closed` if it is capped or closed. The UI reacts by starting a new chat.
 3. Take the conversation lock with a conditional write: no lock held, or the held lock has expired. If the lock is taken, reject with `409 busy`.
 4. Write the idempotency item `IDEMP#<client_message_id>` (condition: doesn't exist). On a retried send, return the existing turn instead: replay the stored answer if it is committed, or return `409 busy` if it is still pending.
@@ -95,15 +95,15 @@ thinking: { type: adaptive }   output_config: { effort: low }   max_tokens: 1600
 ```
 
 - **Prompt bundles are versioned and pinned.** `prompts/vN/` holds the system prompt and the tool definitions, serialised deterministically. The conversation stores its version and uses it for its whole life, because changing either would invalidate the history. New conversations get the newest version. Old versions are kept, since they are small files.
-- **The tier goes in a system block,** so it carries operator authority. It comes from the JWT, never from user text.
-- **The brand being viewed travels with each question**, in the page context block, after the check against the brands the user may view. It travels per question because it can change mid-chat.
+- **The tier goes in a system block,** so it carries operator authority. It comes from the portal's verified session, never from user text.
+- **The selected business unit travels with each question**, in the page context block, because the user can switch it mid-chat. The portal backend has already checked it.
 - **Page context goes in the user message.** The browser sends a page ID; the server checks it against an allow-list and renders the text itself, for example `Activate › Segments › Sports Enthusiasts AU`. A page or entity the tier can't see is dropped.
 - **No timestamps or other per-request values in `system`.** They would break the cache and the history check.
 
 ### 4.4 Run the tool loop
 
 - Claude has one tool, `search_product_docs`. If it makes several calls in one response, they run in parallel, and all results go back in a single user message.
-- The orchestrator adds the tier filter, and a brand filter (the brand being viewed, or `all`), to every call (plan §5.3). The model never sees or sets them.
+- The orchestrator adds the tier filter, and a business unit filter (the selected business unit, or `all`), to every call (plan §5.3). The model never sees or sets them.
 - Retrieved chunks go back as **search-result content blocks with citations enabled**. Claude's answer then carries native citations that point at the source document, and the orchestrator maps each one to a title and a link.
 - A failed tool call (throttling, not found) returns a tool result with `is_error: true`, and Claude explains what it couldn't check.
 - There are **at most 4 tool rounds per turn.** After the 4th, the tool results go back with an extra text block: "Search limit reached for this question. Answer with what you have."
@@ -139,7 +139,7 @@ Claude's thinking isn't shown; it streams as empty thinking blocks by default. T
 ### 4.7 Audit
 
 Each turn writes one structured record to CloudWatch, then on to S3 for Athena. It holds:
-- caller (`sub`, tier, brand), conversation ID and turn ID, prompt version;
+- caller (user, role, business unit), conversation ID and turn ID, prompt version;
 - tools called with their filters and the document IDs returned;
 - guardrail actions, `stop_reason`, final status, token usage (input, cache read, cache write, output) and latency.
 
@@ -205,7 +205,7 @@ Rough figures for one turn, to be replaced with pilot measurements:
 | Editing an older message | Not offered | n/a |
 | Server crashes mid-turn | "Something went wrong" on reconnect. The lock expires after 120 s | No (`pending` turns older than the lock count as failed) |
 | Tier changes | A new chat. The old one is hidden from the new tier | Old chat unchanged |
-| Brand switch ("Viewing from") | The chat continues, and later searches use the new brand | Unchanged |
+| Business unit switch | The chat continues, and later searches use the new business unit | Unchanged |
 | Prompt bundle updated (normal release) | Nothing visible. Open chats keep their version | Unchanged |
 | Security fix or tier-policy change | Open chats close and leave the list. The next question starts a new chat | Closed |
 | Cap reached | "Continue in a new chat", with the summary carried over | New conversation |
@@ -217,10 +217,10 @@ Rough figures for one turn, to be replaced with pilot measurements:
 
 | Item | Key | Holds |
 |---|---|---|
-| Conversation | `PK=CONV#<id>`, `SK=META` | owner `sub`, tier, prompt version, status, title (first 60 characters of the first question; the user can rename), `turn_count`, `context_tokens`, lock (`owner`, `expires_at`), created and updated times, `ttl` |
+| Conversation | `PK=CONV#<id>`, `SK=META` | owner (user ID), tier (role), prompt version, status, title (first 60 characters of the first question; the user can rename), `turn_count`, `context_tokens`, lock (`owner`, `expires_at`), created and updated times, `ttl` |
 | Turn | `PK=CONV#<id>`, `SK=TURN#<ulid>` | status (`pending`, `committed`, `stopped`, `blocked`, `declined`, `failed`, `superseded`), masked question, page ID, `replay` (committed turns only; gzip JSON or S3 pointer), display answer and citations, usage, latency, tools with filters and document IDs, guardrail results, `stop_reason`, feedback, `ttl` |
 | Idempotency | `PK=CONV#<id>`, `SK=IDEMP#<client_message_id>` | turn ID, `ttl` |
-| List index (GSI1) | `GSI1PK=USER#<sub>#<tier>`, `GSI1SK=<updated_at>` | Projected from conversation items. Lists a user's chats for their current tier, newest first |
+| List index (GSI1) | `GSI1PK=USER#<user id>#<role>`, `GSI1SK=<updated_at>` | Projected from conversation items. Lists a user's chats for their current tier, newest first |
 
 - **Replay history** is the `replay` content of every `committed` turn, concatenated in ULID order.
 - **Feedback** and titles live outside `replay`, so changing them never touches what Claude sees.
@@ -247,11 +247,11 @@ Rough figures for one turn, to be replaced with pilot measurements:
 
 ## 10. Worked example
 
-An Agency-tier user on the News AU brand, viewing the Identity Graph page.
+An Agency user working in the News AU business unit, on the Identity Graph page.
 
 | Turn | User | What happens | Stored |
 |---|---|---|---|
-| 1 | "What is a Spine ID?" | Claude calls `search_product_docs("Spine ID definition")`. The orchestrator adds `tier=agency, brand in [news_au, all]`. The answer cites the glossary and the ID Matching guide | Committed |
+| 1 | "What is a Spine ID?" | Claude calls `search_product_docs("Spine ID definition")`. Ask AI adds `tier=agency` and `business_unit in [News AU, all]`. The answer cites the glossary and the ID Matching guide | Committed |
 | 2 | "How is it different from an ID5 ID?" | Claude resolves "it" to Spine ID and calls `search_product_docs("Spine ID vs ID5")`. It explains that ID5 is one input to matching and the Spine ID is the resolved person, citing the ID Matching guide | Committed. The request reads turn 1 from the cache |
 | 3 | "Which tables have Spine IDs in them?" | A data question. Claude says Ask AI can't see the CDL's tables and links to the Data Catalog page. It names no tables | Committed |
 | 4 | "What's the overlap between The Australian and news.com.au?" | Claude searches the tier policy and explains that overlap % isn't available on the Agency tier, citing the policy. The index holds no overlap figures, so there is nothing to leak | Committed |
