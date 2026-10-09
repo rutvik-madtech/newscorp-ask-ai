@@ -1,6 +1,15 @@
-# Ask AI conversation design
+# Ask AI conversation design (phase 2)
 
-Companion to [ASK_AI_PLAN.md](ASK_AI_PLAN.md) §6. This covers how a chat behaves from end to end: what the user sees, what is stored, what Claude receives on each turn, and what happens when something goes wrong.
+Companion to [ASK_AI_PLAN.md](ASK_AI_PLAN.md) §6.
+
+**Phase 1 answers each question on its own (plan §5) and remembers nothing between questions. Phase 2 adds conversation.** This document covers how a chat behaves from end to end: what the user sees, what is stored, what Claude receives on each turn, and what happens when something goes wrong.
+
+**What changes from phase 1:**
+- **The answer flow stays the same:** screen, search with tier filters, stream through Guardrails, audit.
+- **A new DynamoDB conversation store** wraps around it. Each turn takes a lock and loads the committed turns before the answer, and commits the new turn after it.
+- **The request gains the history.** Prompt bundles are pinned per conversation, and a second cache point covers the history.
+- **New endpoints** replace phase 1's single answer endpoint: create, list and get conversations, send a message (streamed) and feedback.
+- **The panel gains** a conversation list, Regenerate, and Continue in a new chat.
 
 ---
 
