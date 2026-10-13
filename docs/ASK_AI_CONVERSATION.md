@@ -5,7 +5,7 @@ Companion to [ASK_AI_PLAN.md](ASK_AI_PLAN.md) §6.
 **Phase 1 answers each question on its own (plan §5) and remembers nothing between questions. Phase 2 adds conversation.** This document covers how a chat behaves from end to end: what the user sees, what is stored, what Claude receives on each turn, and what happens when something goes wrong.
 
 **What changes from phase 1:**
-- **The answer flow stays the same:** screen, search with tier filters, stream through Guardrails, audit.
+- **The answer flow stays the same:** Claude with the Guardrail attached, search with tier filters, stream, audit. One step is added: the question is screened up front with `ApplyGuardrail`, because phase 2 stores the masked text (§4.2).
 - **A new DynamoDB conversation store** wraps around it. Each turn takes a lock and loads the committed turns before the answer, and commits the new turn after it.
 - **The request gains the history.** Prompt bundles are pinned per conversation, and a second cache point covers the history.
 - **New endpoints** replace phase 1's single answer endpoint: create, list and get conversations, send a message (streamed) and feedback.
@@ -77,7 +77,8 @@ A conversation is listed and opened only when its tier matches the user's curren
 
 ### 4.2 Screen the question
 
-- Run `ApplyGuardrail` on the question (source `INPUT`).
+- Run `ApplyGuardrail` on the question (source `INPUT`) before calling Claude.
+- **Why a separate call, when phase 1 doesn't make one:** in phase 1 the Guardrail attached to the Claude call screens the question, but it doesn't return the masked text. Phase 2 needs that text, because the masked question is what gets stored and replayed on later turns.
 - Sensitive information is **masked**, not blocked. A pasted email address becomes `{EMAIL}` before it reaches Claude or the store. Ask AI can't look up individual profiles anyway, so nothing useful is lost.
 - If a denied topic matches, the turn ends with status `blocked` and Claude is not called.
 - **This check runs in parallel with loading the committed turns.** The load is one DynamoDB query on the conversation's partition, plus parallel S3 reads for any offloaded turns. It finishes well inside the Guardrails call, so it adds nothing to the wait.
@@ -112,13 +113,13 @@ thinking: { type: adaptive }   output_config: { effort: low }   max_tokens: 1600
 
 ### 4.5 Stream to the browser
 
-The answer text passes through `ApplyGuardrail` (source `OUTPUT`) in segments, flushed at paragraph or sentence boundaries, before it is sent.
+As in phase 1, the Guardrail attached to each Claude call screens every answer chunk before Bedrock releases it (synchronous mode). The tagged input in that call is the already-masked question.
 
 | SSE event | When | Payload |
 |---|---|---|
 | `turn.accepted` | After Accept | `turn_id` |
 | `status` | Claude calls a tool | "Searching product docs…" |
-| `text.delta` | A checked segment is ready | text |
+| `text.delta` | A screened chunk is ready | text |
 | `citation` | A cited source appears | title, link, snippet |
 | `turn.completed` | Turn committed | `stop_reason` (`end_turn` or `max_tokens`), token summary |
 | `turn.ended` | Turn not committed | status (`stopped`, `blocked`, `declined`, `failed`) and a user-facing message |

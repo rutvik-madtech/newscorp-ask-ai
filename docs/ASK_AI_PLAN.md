@@ -131,7 +131,7 @@ GraphRAG (Bedrock KB on Neptune Analytics) builds a graph of entities and relati
 
 ## 4. Which Bedrock model
 
-**Recommendation: Claude Opus 5.5** (Bedrock ID `anthropic.claude-opus-5-5`), called through the Messages API on Bedrock (Anthropic SDK `AnthropicBedrockMantle` client).
+**Recommendation: Claude Opus 5.5** (Bedrock ID `anthropic.claude-opus-5-5`), called with `InvokeModelWithResponseStream` on the `bedrock-runtime` endpoint. The request body is Anthropic's Messages format, and the Guardrail is attached to the call (§5.2).
 
 - **Why:**
   - It's a tool-using assistant that has to follow tier rules exactly, decline cleanly and cite sources.
@@ -142,9 +142,15 @@ GraphRAG (Bedrock KB on Neptune Analytics) builds a graph of entities and relati
   - Set **`output_config.effort` explicitly**. Start at `low` for answer latency and move to `medium` only if the eval shows a quality gain. The default is `medium`.
   - Stream every response.
   - Cache the system prompt and tool definitions with prompt caching. They are identical for every question, so one cache entry serves every user. This saves cost and time to first token.
-- **Refusals:** check `stop_reason == "refusal"` on every response. Server-side `fallbacks` aren't available on Bedrock, so use the SDK's client-side refusal-fallback middleware and show a polite message in the UI.
+- **Endpoint: `bedrock-runtime`, not `bedrock-mantle`:**
+  - AWS recommends `bedrock-runtime` for most new applications. `bedrock-mantle` is for features only it has (server-side tools such as web search, background inference, Projects, Workspaces), and Ask AI uses none of them.
+  - A Guardrail can be attached to the model call only on `bedrock-runtime`. Bedrock then screens the question and the answer inside the call, so Ask AI makes no separate Guardrails calls in phase 1.
+  - `bedrock-runtime` is in every Bedrock region; `bedrock-mantle` is in some. This widens the choice for data residency.
+  - **`InvokeModelWithResponseStream`, not `ConverseStream`.** InvokeModel takes Anthropic's Messages body as is, so the request in §5.2 (search-result blocks with citations, cache points, `effort`) goes unchanged. Converse would mean translating it into Bedrock's own message format.
+  - **Client:** the Anthropic SDK's `AnthropicBedrock` client (it calls `InvokeModelWithResponseStream`), or boto3. The spike checks that the SDK passes the Guardrail settings through and reports interventions; if it doesn't, use boto3.
+- **Refusals:** check `stop_reason == "refusal"` on every response. Server-side `fallbacks` aren't available on Bedrock, so retry on the fallback model on the client side: the SDK's refusal-fallback middleware if we use its client, otherwise a few lines in the Lambda. Show a polite message in the UI.
 - **Cheaper or faster models (Sonnet 5.5, Haiku 5.5):** run them against the same eval set. Switch only if Opus 5.5 at `low` effort misses the latency target, and only after the cost and quality trade-off is measured and signed off.
-- **Before build:** confirm model access and the region (or a cross-region inference profile) in the NewsCorp AWS account. Data residency (AU / US / UK brands) may constrain the region choice.
+- **Before build:** confirm model access on `bedrock-runtime` and the region (or a cross-region inference profile) in the NewsCorp AWS account. Data residency (AU / US / UK brands) may constrain the region choice.
 
 ### 4.1 Which model runs where
 
@@ -158,12 +164,13 @@ Claude doesn't run the search itself. It works before the search (deciding what 
 | Each search: finding matches | **No model.** S3 Vectors similarity search | Finds the closest chunks, considering only those tagged for the user's tier and business unit |
 | Each search: picking the best | **Amazon Rerank** or **Cohere Rerank** | Re-scores the ~20 candidates against the search words and keeps the best 5–8 |
 | Each question: answering | **Claude Opus 5.5** | Writes the answer from those passages, following the instructions, with citations |
-| Each question: screening | **Bedrock Guardrails** (managed classifiers, not a chat model) | Checks the question and the answer for PII and denied topics |
+| Each question: screening | **Bedrock Guardrails** (managed classifiers, not a chat model) | Checks the question and the answer for PII and denied topics, inside each Claude call |
 
 - **Who calls what:**
   - Ask AI's code calls `Retrieve` and adds the filters.
   - The Knowledge Base calls Titan for the search words, searches S3 Vectors, and calls the reranker named in the `Retrieve` request.
   - Claude only ever sees the final passages, as text.
+  - Bedrock runs the Guardrail inside each Claude call. Ask AI doesn't call Guardrails separately.
 - **The embedding model is set once on the Knowledge Base** and must stay the same: changing it means re-indexing all the docs.
 - **Cost:** per question, Claude runs at least twice: once to decide what to search and once to answer, plus once for each extra round of searching. Titan and the reranker run once per search. Embedding and reranking cost fractions of a cent per search, so nearly all model cost is Claude.
 - **One more model at publishing time:** if PDFs or decks go through Bedrock Data Automation or the foundation-model parser (§3.1), that parser is a model too.
@@ -180,8 +187,8 @@ flowchart LR
   subgraph REQ["At request time"]
     UI["CDL portal<br/>Ask AI panel"] -->|question + session cookie| PB["CDL portal backend<br/>/api: session and business unit check"]
     PB -->|user, role, business unit, question| ASK["Ask AI Lambda<br/>private, invoked with IAM<br/>tool: search_product_docs"]
-    ASK -->|messages + tools, streamed| CLAUDE["Claude Opus 5.5<br/>Amazon Bedrock"]
-    ASK -->|screen question and answer| GR["Bedrock Guardrails"]
+    ASK -->|InvokeModel, streamed, Guardrail attached| CLAUDE["Claude Opus 5.5<br/>bedrock-runtime"]
+    CLAUDE ---|screens question and answer in the call| GR["Bedrock Guardrails"]
     ASK -->|Retrieve + tier and business unit filter| KB["Bedrock Knowledge Base<br/>product docs"]
     ASK -->|audit record, feedback| LOG["CloudWatch to S3<br/>audit log"]
   end
@@ -210,23 +217,23 @@ sequenceDiagram
   participant UI as CDL portal
   participant PB as Portal backend
   participant O as Ask AI Lambda
-  participant G as Guardrails
   participant C as Claude on Bedrock
+  participant G as Guardrails
   participant KB as Knowledge Base
   participant L as Audit log
   UI->>PB: POST /api/ask-ai/answers?bu=, with session cookie
   PB->>PB: check session and business unit
   PB->>O: invoke via IAM: user, role, business unit, question, page
-  O->>G: screen question
-  O->>C: static rules + tools + tier block + question
+  O->>C: static rules + tools + tier block + question, Guardrail attached
+  C->>G: screen the tagged question
   loop while Claude calls a tool, at most 4 times
     C-->>O: tool_use search_product_docs(query)
     O->>KB: Retrieve(query + tier and business unit filter)
     KB-->>O: top chunks, reranked
     O->>C: tool_result
   end
-  C-->>O: answer stream with citations
-  O->>G: screen answer segments
+  C->>G: screen each answer chunk before release
+  C-->>O: screened answer stream with citations
   O-->>PB: streamed answer
   PB-->>UI: SSE: status, text, citations, done
   O->>L: audit record
@@ -235,16 +242,19 @@ sequenceDiagram
 1. **Verify (portal backend).**
    - The portal backend validates the `session_id` cookie and checks that `bu` is one of the user's business units, as it does for every other `/api` route.
    - It then invokes the Ask AI Lambda with the user, role, business unit, page ID and question. Nothing that matters for access comes from the browser unchecked.
-2. **Screen the question** with `ApplyGuardrail`. Sensitive information is masked, and a denied topic ends the request with a standard message.
-3. **Build the request.**
+2. **Build the request.**
    - The static system prompt and the tool definitions come first, with a cache point after them that every user shares.
    - Then a block with the user's tier.
    - Then the user message, holding the page context (rendered by the server from an allow-listed page ID, plus the selected business unit) and the question.
+   - **Only the question is wrapped in the Guardrail's input tags.** The rules, the page context and the retrieved passages are outside the tags, so they aren't screened as input.
+3. **Call Claude with the Guardrail attached:** `InvokeModelWithResponseStream` on `bedrock-runtime`, with the guardrail ID and version and synchronous stream processing.
+   - Bedrock screens the tagged question before Claude runs. Sensitive information is masked, and a denied topic ends the request with the Guardrail's standard message.
+   - Every call in the tool loop carries the Guardrail and the tagged question.
 4. **Run the tool loop.**
    - Claude can search up to 4 times within a 90-second budget.
    - Ask AI adds the tier and business unit filter to every `Retrieve` (§5.3).
    - Results go back as search-result blocks with citations enabled, so the answer carries native citations.
-5. **Stream the answer** through `ApplyGuardrail` in segments flushed at sentence or paragraph boundaries. The portal backend relays the stream to the browser as SSE events:
+5. **Stream the answer.** Bedrock screens each chunk of the answer before releasing it (synchronous mode). Asynchronous mode would show text before it is checked and can't mask PII, so we don't use it. The portal backend relays the stream to the browser as SSE events:
    - `answer.accepted`;
    - `status` ("Searching product docs…");
    - `text.delta`;
@@ -268,8 +278,7 @@ sequenceDiagram
   participant B as Browser (CDL portal)
   participant PB as Portal backend (/api)
   participant L as Ask AI Lambda (private)
-  participant G as Guardrails (bedrock-runtime)
-  participant C as Claude Opus 5.5 (bedrock-mantle)
+  participant C as Claude Opus 5.5 + Guardrail (bedrock-runtime)
   participant KB as Knowledge Base (bedrock-agent-runtime)
   participant V as S3 Vectors
   participant A as CloudWatch Logs
@@ -277,9 +286,8 @@ sequenceDiagram
   PB->>PB: validate session, check bu is one of the user's business units
   PB->>L: InvokeWithResponseStream (IAM): role, business unit, question
   L-->>B: SSE answer.accepted (relayed by the portal backend)
-  L->>G: ApplyGuardrail, source INPUT (the question)
-  G-->>L: NONE, or masked text
-  L->>C: POST /anthropic/v1/messages, streamed (anthropic.claude-opus-5-5, effort low)
+  L->>C: InvokeModelWithResponseStream (anthropic.claude-opus-5-5, effort low), Guardrail attached, question tagged
+  C->>C: Guardrail screens the tagged question (PII masked, denied topics)
   loop each search, up to 4, within 90 s
     C-->>L: tool_use search_product_docs(query)
     L->>KB: Retrieve(knowledgeBaseId, query) with filter allowed_tiers contains role AND business_unit in [bu, all]
@@ -288,23 +296,23 @@ sequenceDiagram
     V-->>KB: 20 nearest chunks
     KB->>KB: rerank to the best 8 (Amazon or Cohere Rerank)
     KB-->>L: retrievalResults (text, source URI, metadata)
-    L->>C: tool_result as search_result blocks, citations on
+    L->>C: InvokeModelWithResponseStream again: tool_result as search_result blocks, Guardrail attached
   end
-  C-->>L: answer text and citations, streamed (stop_reason end_turn)
-  loop each sentence or paragraph
-    L->>G: ApplyGuardrail, source OUTPUT (the segment)
-    G-->>L: NONE, release the segment
+  loop each answer chunk, synchronous mode
+    C->>C: Guardrail screens the chunk before release, PII masked
+    C-->>L: screened chunk and citations (stop_reason end_turn on the last)
     L-->>B: SSE text.delta and citation (relayed)
   end
   L-->>B: SSE answer.completed with answer_id
   L->>A: audit record (user, role, business unit, sources, tokens, latency)
 ```
 
-- **Endpoints.** Claude: `https://bedrock-mantle.{region}.api.aws/anthropic`. Knowledge Base search: `bedrock-agent-runtime` (`Retrieve`). Guardrails: `bedrock-runtime` (`ApplyGuardrail`).
+- **Endpoints.** Claude and the Guardrail: `bedrock-runtime` (`InvokeModelWithResponseStream` with the guardrail ID and version, synchronous stream processing, and the question inside the Guardrail's input tags). Knowledge Base search: `bedrock-agent-runtime` (`Retrieve`).
 - **Other paths:**
-  - If Guardrails intervenes at step 6, the request ends with `answer.ended` (blocked) and Claude is never called.
-  - For a question about CDL data or live numbers, Claude declines without searching, so steps 8 to 15 don't run.
-  - A `refusal` stop reason goes to the SDK's refusal-fallback middleware, which retries on the fallback model.
+  - If the Guardrail blocks the question at step 6, Claude never runs. Bedrock returns the Guardrail's standard message and the request ends with `answer.ended` (blocked).
+  - If the Guardrail intervenes on an answer chunk, the rest of the answer is replaced with the standard message and the request ends with `answer.ended` (blocked).
+  - For a question about CDL data or live numbers, Claude declines without searching, so steps 7 to 14 don't run.
+  - A `refusal` stop reason triggers the client-side retry on the fallback model (§4).
   - When a search starts, the Lambda also sends a `status` event ("Searching product docs…").
 
 ### 5.3 Tier enforcement (defence in depth)
@@ -317,10 +325,10 @@ sequenceDiagram
    The model never controls these filters, and they aren't parameters in the tool schema. Confirm the vector store supports `listContains`. If it doesn't, use one boolean attribute per tier (`visible_to_agency: true`) with an `equals` filter.
 3. **Private Lambda:** only the portal backend's IAM role can invoke Ask AI, so nobody can call it directly with a made-up role.
 4. **Prompt:** the system prompt states the user's tier and the withheld-field policy. It tells the model to decline and explain when asked for something withheld.
-5. **Guardrails:** Bedrock Guardrails on input and output:
+5. **Guardrails:** a Bedrock Guardrail attached to every Claude call screens the tagged question and each answer chunk:
    - sensitive-information filters (PII redaction);
    - denied topics, e.g. "identify a specific person", "export raw data";
-   - a contextual grounding check.
+   - a contextual grounding check. The spike confirms it works on a streamed call.
 6. **Tests:** an automated red-team prompt suite per tier runs in CI (see §7).
 
 ### 5.4 Agent pattern: our own tool-use loop
@@ -360,6 +368,7 @@ Phase 2 keeps the phase 1 answer flow and adds a conversation around it: follow-
 
 **What phase 2 adds:**
 - **A conversation store** in DynamoDB (S3 for large turns).
+- **An up-front `ApplyGuardrail` call on the question.** Phase 2 stores the masked question and replays it on later turns, and the Guardrail attached to the Claude call doesn't return the masked text. The attached Guardrail still screens the answer.
 - **Conversation routes on the portal backend:** create, list, get, send message (streamed) and feedback, under `/api/ask-ai/conversations`.
 - **A turn pipeline** around the answer flow: a lock and idempotency key before the answer, and a commit after it.
 - **Append-only history** with pinned prompt bundles.
@@ -375,8 +384,9 @@ flowchart LR
   subgraph REQ["At request time"]
     UI["CDL portal<br/>chat panel + conversation list"] -->|message + session cookie| PB["CDL portal backend<br/>/api: session and business unit check"]
     PB -->|user, role, business unit, conversation, message| ASK["Ask AI<br/>Lambda or AgentCore Runtime<br/>loads and commits history"]
-    ASK -->|messages + tools + history, streamed| CLAUDE["Claude Opus 5.5<br/>Amazon Bedrock"]
-    ASK -->|screen question and answer| GR["Bedrock Guardrails"]
+    ASK -->|InvokeModel with history, streamed, Guardrail attached| CLAUDE["Claude Opus 5.5<br/>bedrock-runtime"]
+    ASK -->|ApplyGuardrail: mask the question| GR["Bedrock Guardrails"]
+    CLAUDE ---|screens each answer chunk in the call| GR
     ASK -->|lock, load turns, commit turn| DDB["DynamoDB<br/>conversation turns<br/>new in phase 2"]
     ASK -->|Retrieve + tier and business unit filter| KB["Bedrock Knowledge Base<br/>product docs"]
     ASK -->|audit record, feedback| LOG["CloudWatch to S3<br/>audit log"]
@@ -409,17 +419,17 @@ sequenceDiagram
     O->>D: take lock, load committed turns
     D-->>O: prior turns
   and screen
-    O->>G: screen question
+    O->>G: ApplyGuardrail: mask the question
   end
-  O->>C: pinned rules + tools + history + question
+  O->>C: pinned rules + tools + history + masked question, Guardrail attached
   loop while Claude calls a tool, at most 4 times
     C-->>O: tool_use search_product_docs(query)
     O->>KB: Retrieve(query + tier and business unit filter)
     KB-->>O: top chunks, reranked
     O->>C: tool_result
   end
-  C-->>O: answer stream with citations
-  O->>G: screen answer segments
+  C->>G: screen each answer chunk before release
+  C-->>O: screened answer stream with citations
   O-->>PB: streamed answer
   PB-->>UI: SSE: text, citations, done
   O->>D: commit turn, release lock
@@ -495,7 +505,7 @@ sequenceDiagram
   - Phase 2 adds a per-tier daily token budget, counted in the DynamoDB table.
 - **IAM:**
   - Phase 1: the portal backend's role may invoke the Ask AI function and nothing more of Ask AI.
-  - The Ask AI role may call `bedrock:InvokeModel*` on the chosen model, `bedrock:Retrieve` on the product docs KB and `bedrock:ApplyGuardrail` on the guardrail, and write to its own log group. Nothing else.
+  - The Ask AI role may call `bedrock:InvokeModel*` on the chosen model, `bedrock:Retrieve` on the product docs KB and `bedrock:ApplyGuardrail` on the guardrail (needed to attach it to the model call), and write to its own log group. Nothing else.
   - Phase 2 adds read and write on the conversation table and its S3 prefix.
 - **Cost drivers:**
   - Output tokens. Keep answers concise via the prompt and `effort: low`.
@@ -509,7 +519,7 @@ sequenceDiagram
 
 | # | Story | Depends on | Est. |
 |---|---|---|---|
-| 1 | Pre-build spike: region and data residency, Bedrock model access, S3 Vectors limits and `listContains` filter support, and how the portal backend will reach Ask AI | — | 2–3 d |
+| 1 | Pre-build spike: region and data residency, Opus 5.5 access on `bedrock-runtime`, S3 Vectors limits and `listContains` filter support, how the portal backend will reach Ask AI, and a streamed Claude call with the Guardrail attached (citations intact, SDK or boto3, contextual grounding check) | — | 2–3 d |
 | 2 | Content plan and doc template (with the "Applies to tier:" line). Write the first product docs, glossary and tier policy | Product, Governance | ongoing |
 | 3 | Golden eval set (types A–B plus decline cases) and tier red-team set | 2 | 1 wk |
 | 4 | Infra (CDK/Terraform): private Ask AI Lambda with response streaming, S3 source bucket, S3 Vectors index, product docs KB, Guardrail, IAM | 1 | 1 wk |
@@ -538,9 +548,9 @@ sequenceDiagram
 **Phase 1**
 1. Who writes and owns the product documentation, and does any of it exist today?
 2. Where will the docs live (Git or a Confluence space), and who sets each page's "Applies to tier:" line?
-3. AWS region(s) and data residency per brand. Are Bedrock model access and S3 Vectors available there?
+3. AWS region(s) and data residency per brand. Are Opus 5.5 on `bedrock-runtime` and S3 Vectors available there?
 4. Latency target (e.g. first token < 2 s, p95 full answer < 10 s) and the eval acceptance threshold.
-5. Should audit records keep the question and answer text, and for how long?
+5. Should audit records keep the question and answer text, and for how long? If they keep the question, phase 1 also needs an `ApplyGuardrail` call to get the masked text, because the attached Guardrail doesn't return it.
 6. Should the panel send page context from the first release?
 7. What stack and hosting does the portal backend use, and can it relay a streamed response? This decides between relaying through it, a CloudFront route, or a module inside it (§5.5).
 8. The code has the roles Power User, Admin and Agency, but the epic lists Power User, Internal Viewer and Agency. Which set is final?
