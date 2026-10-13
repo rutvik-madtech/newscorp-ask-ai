@@ -258,6 +258,55 @@ sequenceDiagram
 - Starter questions depend on the page.
 - A hint under the input says each question is answered on its own.
 
+#### Low-level sequence (API calls)
+
+Claude and the Knowledge Base never call each other. The Ask AI Lambda passes every request between them, signing each call with its own IAM role.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser (CDL portal)
+  participant PB as Portal backend (/api)
+  participant L as Ask AI Lambda (private)
+  participant G as Guardrails (bedrock-runtime)
+  participant C as Claude Opus 5.5 (bedrock-mantle)
+  participant KB as Knowledge Base (bedrock-agent-runtime)
+  participant V as S3 Vectors
+  participant A as CloudWatch Logs
+  B->>PB: POST /api/ask-ai/answers?bu=… with session cookie
+  PB->>PB: validate session, check bu is one of the user's business units
+  PB->>L: InvokeWithResponseStream (IAM): role, business unit, question
+  L-->>B: SSE answer.accepted (relayed by the portal backend)
+  L->>G: ApplyGuardrail, source INPUT (the question)
+  G-->>L: NONE, or masked text
+  L->>C: POST /anthropic/v1/messages, streamed (anthropic.claude-opus-5-5, effort low)
+  loop each search, up to 4, within 90 s
+    C-->>L: tool_use search_product_docs(query)
+    L->>KB: Retrieve(knowledgeBaseId, query) with filter allowed_tiers contains role AND business_unit in [bu, all]
+    KB->>KB: embed the query with Titan Text Embeddings V2
+    KB->>V: QueryVectors, topK 20 with the metadata filter
+    V-->>KB: 20 nearest chunks
+    KB->>KB: rerank to the best 8 (Amazon or Cohere Rerank)
+    KB-->>L: retrievalResults (text, source URI, metadata)
+    L->>C: tool_result as search_result blocks, citations on
+  end
+  C-->>L: answer text and citations, streamed (stop_reason end_turn)
+  loop each sentence or paragraph
+    L->>G: ApplyGuardrail, source OUTPUT (the segment)
+    G-->>L: NONE, release the segment
+    L-->>B: SSE text.delta and citation (relayed)
+  end
+  L-->>B: SSE answer.completed with answer_id
+  L->>A: audit record (user, role, business unit, sources, tokens, latency)
+```
+
+- **Endpoints.** Claude: `https://bedrock-mantle.{region}.api.aws/anthropic`. Knowledge Base search: `bedrock-agent-runtime` (`Retrieve`). Guardrails: `bedrock-runtime` (`ApplyGuardrail`).
+- **Other paths:**
+  - If Guardrails intervenes at step 6, the request ends with `answer.ended` (blocked) and Claude is never called.
+  - For a question about CDL data or live numbers, Claude declines without searching, so steps 8 to 15 don't run.
+  - A `refusal` stop reason goes to the SDK's refusal-fallback middleware, which retries on the fallback model.
+  - When a search starts, the Lambda also sends a `status` event ("Searching product docs…").
+
 ### 5.3 Tier enforcement (defence in depth)
 
 1. **Doc tags:** every page carries `allowed_tiers`. A page without a tier line gets Power User and Admin only.
