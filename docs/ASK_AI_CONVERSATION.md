@@ -5,7 +5,7 @@ Companion to [ASK_AI_PLAN.md](ASK_AI_PLAN.md) §6.
 **Phase 1 answers each question on its own (plan §5) and remembers nothing between questions. Phase 2 adds conversation.** This document covers how a chat behaves from end to end: what the user sees, what is stored, what Claude receives on each turn, and what happens when something goes wrong.
 
 **What changes from phase 1:**
-- **The answer flow stays the same:** Claude with the Guardrail attached, search with tier filters, stream, audit. One step is added: the question is screened up front with `ApplyGuardrail`, because phase 2 stores the masked text (§4.2).
+- **The answer flow stays the same:** search with tier filters, stream, audit. One step is added: personal data in the question is masked with `ApplyGuardrail` first, because phase 2 stores the question (§4.2).
 - **A new DynamoDB conversation store** wraps around it. Each turn takes a lock and loads the committed turns before the answer, and commits the new turn after it.
 - **The request gains the history.** Prompt bundles are pinned per conversation, and a second cache point covers the history.
 - **New endpoints** replace phase 1's single answer endpoint: create, list and get conversations, send a message (streamed) and feedback.
@@ -18,7 +18,7 @@ Companion to [ASK_AI_PLAN.md](ASK_AI_PLAN.md) §6.
 
 1. **The Ask AI backend owns the conversation.** The orchestrator loads the history from DynamoDB at the start of every turn and writes the new turn back at the end. The browser sends a conversation ID, a client message ID, the question and the current page. It never sends history.
 2. **History is append-only.** A committed turn is stored exactly as Claude returned it and is never edited. Claude Opus 5.5 checks that the system prompt, the tools and every earlier message are unchanged. Edits break the prompt cache, and on newer accounts the request is rejected.
-3. **Commit or discard.** A turn joins the history only when it completes normally. Stopped, blocked, declined and failed turns are shown to the user and kept in the audit log, but never sent to Claude again.
+3. **Commit or discard.** A turn joins the history only when it completes normally. Stopped, declined and failed turns are shown to the user and kept in the audit log, but never sent to Claude again.
 4. **One conversation, one context.** A conversation is bound to the user, tier and prompt version it started with.
 5. **Generally available features only.** Long chats are handled with a cap and a carried-over summary, not with beta compaction.
 
@@ -75,12 +75,12 @@ A conversation is listed and opened only when its tier matches the user's curren
 4. Write the idempotency item `IDEMP#<client_message_id>` (condition: doesn't exist). On a retried send, return the existing turn instead: replay the stored answer if it is committed, or return `409 busy` if it is still pending.
 5. Write the turn item with status `pending`, the masked question (from §4.2) and the page ID.
 
-### 4.2 Screen the question
+### 4.2 Mask the question
 
-- Run `ApplyGuardrail` on the question (source `INPUT`) before calling Claude.
-- **Why a separate call, when phase 1 doesn't make one:** in phase 1 the Guardrail attached to the Claude call screens the question, but it doesn't return the masked text. Phase 2 needs that text, because the masked question is what gets stored and replayed on later turns.
+- Run `ApplyGuardrail` on the question (source `INPUT`) before calling Claude. Its only job is masking personal data.
+- **Why phase 2 needs it and phase 1 doesn't:** phase 1 stores no question text (plan §5.3). Phase 2 stores each question with the conversation for 30–90 days and replays it on later turns, so personal data is masked before it is stored.
 - Sensitive information is **masked**, not blocked. A pasted email address becomes `{EMAIL}` before it reaches Claude or the store. Ask AI can't look up individual profiles anyway, so nothing useful is lost.
-- If a denied topic matches, the turn ends with status `blocked` and Claude is not called.
+- Off-topic questions aren't filtered here. Claude declines them, as in phase 1 (§9, rule 1).
 - **This check runs in parallel with loading the committed turns.** The load is one DynamoDB query on the conversation's partition, plus parallel S3 reads for any offloaded turns. It finishes well inside the Guardrails call, so it adds nothing to the wait.
 
 ### 4.3 Build the request
@@ -113,16 +113,16 @@ thinking: { type: adaptive }   output_config: { effort: low }   max_tokens: 1600
 
 ### 4.5 Stream to the browser
 
-As in phase 1, the Guardrail attached to each Claude call screens every answer chunk before Bedrock releases it (synchronous mode). The tagged input in that call is the already-masked question.
+Answer text streams to the browser as Claude writes it, as in phase 1.
 
 | SSE event | When | Payload |
 |---|---|---|
 | `turn.accepted` | After Accept | `turn_id` |
 | `status` | Claude calls a tool | "Searching product docs…" |
-| `text.delta` | A screened chunk is ready | text |
+| `text.delta` | Claude writes more of the answer | text |
 | `citation` | A cited source appears | title, link, snippet |
 | `turn.completed` | Turn committed | `stop_reason` (`end_turn` or `max_tokens`), token summary |
-| `turn.ended` | Turn not committed | status (`stopped`, `blocked`, `declined`, `failed`) and a user-facing message |
+| `turn.ended` | Turn not committed | status (`stopped`, `declined`, `failed`) and a user-facing message |
 
 Claude's thinking isn't shown; it streams as empty thinking blocks by default. The status line covers that time.
 
@@ -198,8 +198,7 @@ Rough figures for one turn, to be replaced with pilot measurements:
 | Network retry of the same send | The original answer, no duplicate | Matched by the idempotency key |
 | Bedrock error or throttling before any output | "Couldn't answer just now" with **Retry**. The SDK has already retried twice | No |
 | A tool fails | Claude says what it couldn't check and answers the rest | Yes, with the error tool result |
-| Guardrails block the question | A standard "can't help with that" message | No |
-| Guardrails block the answer mid-stream | The partial text is replaced with a standard message | No |
+| Off-topic question | A short standard message saying what Ask AI can help with | Yes, committed |
 | Claude declines, including after the fallback | A standard message | No |
 | Answer hits `max_tokens` | Answer marked "cut off", with **Continue**, which sends a new turn | Yes, committed |
 | **Regenerate** the last answer | A new answer replaces it | The old turn becomes `superseded` and the new one is committed from the same prefix |
@@ -219,7 +218,7 @@ Rough figures for one turn, to be replaced with pilot measurements:
 | Item | Key | Holds |
 |---|---|---|
 | Conversation | `PK=CONV#<id>`, `SK=META` | owner (user ID), tier (role), prompt version, status, title (first 60 characters of the first question; the user can rename), `turn_count`, `context_tokens`, lock (`owner`, `expires_at`), created and updated times, `ttl` |
-| Turn | `PK=CONV#<id>`, `SK=TURN#<ulid>` | status (`pending`, `committed`, `stopped`, `blocked`, `declined`, `failed`, `superseded`), masked question, page ID, `replay` (committed turns only; gzip JSON or S3 pointer), display answer and citations, usage, latency, tools with filters and document IDs, guardrail results, `stop_reason`, feedback, `ttl` |
+| Turn | `PK=CONV#<id>`, `SK=TURN#<ulid>` | status (`pending`, `committed`, `stopped`, `declined`, `failed`, `superseded`), masked question, page ID, `replay` (committed turns only; gzip JSON or S3 pointer), display answer and citations, usage, latency, tools with filters and document IDs, guardrail results, `stop_reason`, feedback, `ttl` |
 | Idempotency | `PK=CONV#<id>`, `SK=IDEMP#<client_message_id>` | turn ID, `ttl` |
 | List index (GSI1) | `GSI1PK=USER#<user id>#<role>`, `GSI1SK=<updated_at>` | Projected from conversation items. Lists a user's chats for their current tier, newest first |
 
@@ -264,8 +263,8 @@ An Agency user working in the News AU business unit, on the Identity Graph page.
 - Time to first token and total latency (p50/p95).
 - Tool rounds per turn.
 - Cache read ratio and tokens per turn.
-- Commit rate, plus discard rates by reason (stopped, blocked, declined, failed).
-- Guardrail interventions and refusal rate.
+- Commit rate, plus discard rates by reason (stopped, declined, failed).
+- How often the Guardrail masks personal data, and the refusal rate.
 - Thumbs-down rate.
 - How often chats hit the cap and are carried over.
 
