@@ -1,0 +1,18 @@
+{
+  "metadataAttributes": {
+    "title": "Realtor.com data in the CDL",
+    "doc_type": "guide",
+    "pillar": "taxonomy",
+    "allowed_tiers": [
+      "Power User",
+      "Admin",
+      "Agency"
+    ],
+    "tier_power_user": true,
+    "tier_admin": true,
+    "tier_agency": true,
+    "business_unit": "Realtor.com",
+    "console_link": "/taxonomy",
+    "source_updated_at": "2026-10-01"
+  }
+}

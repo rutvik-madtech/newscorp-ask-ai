@@ -1,0 +1,16 @@
+{
+  "metadataAttributes": {
+    "title": "Manage users and roles",
+    "doc_type": "how_to",
+    "pillar": "admin",
+    "allowed_tiers": [
+      "Admin"
+    ],
+    "tier_power_user": false,
+    "tier_admin": true,
+    "tier_agency": false,
+    "business_unit": "all",
+    "console_link": "/admin/access-roles",
+    "source_updated_at": "2026-10-01"
+  }
+}

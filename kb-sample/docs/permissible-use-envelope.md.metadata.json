@@ -1,0 +1,18 @@
+{
+  "metadataAttributes": {
+    "title": "The permissible-use envelope",
+    "doc_type": "concept",
+    "pillar": "delivery",
+    "allowed_tiers": [
+      "Power User",
+      "Admin",
+      "Agency"
+    ],
+    "tier_power_user": true,
+    "tier_admin": true,
+    "tier_agency": true,
+    "business_unit": "all",
+    "console_link": "/delivery",
+    "source_updated_at": "2026-10-01"
+  }
+}
