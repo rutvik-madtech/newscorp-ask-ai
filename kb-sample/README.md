@@ -43,7 +43,8 @@ Console page: /audiences
 ```
 
 - **`allowed_tiers`** uses the portal's role names exactly as `/api/auth/me` returns them, so the Lambda can pass the role straight into the filter.
-- **`tier_power_user`, `tier_admin`, `tier_agency`** carry the same information as one flag per role. Use them with an `equals` filter if the vector store can't filter on a list (plan §5.3).
+- **`tier_power_user`, `tier_admin`, `tier_agency`** carry the same information as one flag per role, filtered with `equals`. The Lambda uses these by default (`TIER_FILTER` = `flags`): the console test panel can't test a list filter, and S3 Vectors may ignore `listContains` without an error (plan §5.3). Switch to `list` only after the CloudShell test in the console guide shows the list filter hides internal pages.
+- **If a sync warns `Ignored N files due to invalid metadata attributes`**, the S3 vector store rejected the `allowed_tiers` list. Remove that attribute from the tag files and sync again; the flags still carry the roles.
 - **A page with no tier line gets Power User and Admin only.** `release-notes.md` has none, on purpose, to test that a missing tag fails safe.
 
 After editing a page, run `python3 make_sidecars.py` and upload both files again.
@@ -58,17 +59,21 @@ After editing a page, run `python3 make_sidecars.py` and upload both files again
 
 ## Test cases this set is built for
 
-| Question | Role | Business unit | Expected |
-|---|---|---|---|
-| How do I build a Cross-BU audience? | Agency | Dow Jones | Answer from build-an-audience, including that Cross-BU audiences are built by Power Users and Admins |
-| How do I approve a request from Realtor.com? | Power User | Dow Jones | Answer from rules-of-use-approvals |
-| How do I approve a request from Realtor.com? | Agency | Dow Jones | No internal page retrieved. Ask AI says this isn't available for the Agency role |
-| What signals does Realtor.com contribute? | Agency | Realtor.com | Answer from bu-realtor |
-| What signals does Realtor.com contribute? | Agency | Dow Jones | bu-realtor filtered out by business unit. Ask AI says it found nothing for this business unit |
-| How do I add a user? | Power User | Dow Jones | admin-access-roles filtered out (Admin only) |
-| How do I add a user? | Admin | Dow Jones | Answer from admin-access-roles |
-| What changed in the September release? | Agency | Dow Jones | release-notes filtered out (default tags) |
-| My Permutive delivery failed. What do I do? | Any | Any | Answer from delivery-troubleshooting |
-| What does an index of 2.3 mean? | Any | Any | Answer from analysis-runs or glossary |
-| How many people are in my C-suite audience? | Any | Any | Declined: live numbers aren't available in Ask AI |
-| Write me a poem about data | Any | Any | Declined as off-topic, without a search |
+A search always returns up to 8 chunks from the pages the role and business unit may see, so a restricted question still gets an answer from the pages that are visible. The real check is the last column: those pages must never come back for that role or business unit.
+
+| Question | Role | Business unit | Expected answer | Must never come back |
+|---|---|---|---|---|
+| How do I build a Cross-BU audience? | Agency | Dow Jones | Steps from build-an-audience, and that Cross-BU audiences are built by Power Users and Admins | |
+| How do I approve a request from Realtor.com? | Power User | Dow Jones | Steps from rules-of-use-approvals | |
+| How do I approve a request from Realtor.com? | Agency | Dow Jones | Agency users can't approve requests (from roles-and-access) | rules-of-use-approvals |
+| What signals does Realtor.com contribute? | Agency | Realtor.com | The three signals from bu-realtor | |
+| What signals does Realtor.com contribute? | Agency | Dow Jones | At most a general mention from taxonomy, not the signal list | bu-realtor |
+| How do I add a user? | Power User | Dow Jones | Power Users can't manage users; ask an Admin (from roles-and-access) | admin-access-roles |
+| How do I add a user? | Admin | Dow Jones | Steps from admin-access-roles | |
+| What changed in the September release? | Agency | Dow Jones | Found no release notes | release-notes |
+| My Permutive delivery failed. What do I do? | Any | Any | Steps from delivery-troubleshooting | |
+| What does an index of 2.3 mean? | Any | Any | 2.3 times as common as average, from analysis-runs or glossary | |
+| How many people are in my C-suite audience? | Any | Any | Declined: live numbers aren't available in Ask AI | |
+| Write me a poem about data | Any | Any | Declined as off-topic, without a search | |
+
+The business-unit values in the tags (`Dow Jones`, `Realtor.com`) must match the names the portal backend sends from `GET /business-units`. Check them with the portal team before using real docs.

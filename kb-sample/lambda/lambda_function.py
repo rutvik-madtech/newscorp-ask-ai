@@ -6,22 +6,23 @@ Test event: {"question": "...", "role": "Power User" | "Admin" | "Agency", "bu":
 Needs the anthropic SDK as a Lambda layer (boto3 comes with the runtime) and
 these environment variables:
   KB_ID              the Knowledge Base ID
-  MODEL_ID           Claude's Bedrock model or inference profile ID
-  FALLBACK_MODEL_ID  model to retry on if Claude declines (blank turns it off)
+  MODEL_ID           Claude's inference profile ID, such as us.anthropic.claude-opus-5-5
+  FALLBACK_MODEL_ID  inference profile ID to retry on if Claude declines (blank turns it off)
   RERANK_MODEL_ARN   rerank model ARN (blank turns reranking off)
-  TIER_FILTER        "list" (allowed_tiers) or "flags" (tier_* booleans)
+  TIER_FILTER        "flags" (tier_* booleans, the default) or "list" (allowed_tiers, only
+                     after testing that the vector store applies listContains)
 """
 import os
 
 import boto3
-from anthropic import AnthropicBedrock, BetaFallbackState, BetaRefusalFallbackMiddleware
+from anthropic import APIStatusError, AnthropicBedrock, BetaFallbackState, BetaRefusalFallbackMiddleware
 
 REGION = os.environ["AWS_REGION"]
 KB_ID = os.environ["KB_ID"]
-MODEL_ID = os.environ.get("MODEL_ID", "anthropic.claude-opus-5-5")
+MODEL_ID = os.environ["MODEL_ID"]
 FALLBACK_MODEL_ID = os.environ.get("FALLBACK_MODEL_ID", "")
 RERANK_MODEL_ARN = os.environ.get("RERANK_MODEL_ARN", "")
-TIER_FILTER = os.environ.get("TIER_FILTER", "list")
+TIER_FILTER = os.environ.get("TIER_FILTER", "flags")
 
 ROLES = ("Power User", "Admin", "Agency")
 MAX_SEARCHES = 4
@@ -60,10 +61,10 @@ SEARCH_TOOL = {
 
 def search_product_docs(query, role, bu):
     """Run one Knowledge Base search. The role and business unit filter comes from the caller, never from Claude."""
-    if TIER_FILTER == "flags":
-        tier = {"equals": {"key": "tier_" + role.lower().replace(" ", "_"), "value": True}}
-    else:
+    if TIER_FILTER == "list":
         tier = {"listContains": {"key": "allowed_tiers", "value": role}}
+    else:
+        tier = {"equals": {"key": "tier_" + role.lower().replace(" ", "_"), "value": True}}
     config = {
         "numberOfResults": 20 if RERANK_MODEL_ARN else 8,
         "filter": {"andAll": [tier, {"in": {"key": "business_unit", "value": [bu, "all"]}}]},
@@ -108,34 +109,43 @@ def lambda_handler(event, context):
     messages = [{"role": "user", "content": question}]
     searches = []
 
-    with BetaFallbackState():
-        for _ in range(MAX_SEARCHES + 1):
-            response = claude.beta.messages.create(
-                model=MODEL_ID,
-                max_tokens=16000,
-                system=system,
-                tools=[SEARCH_TOOL],
-                output_config={"effort": "low"},
-                messages=messages,
-            )
-            if response.stop_reason != "tool_use":
-                break
+    try:
+        with BetaFallbackState():
+            while True:
+                # Once the search limit is reached, the last call must answer: no more tool calls.
+                out_of_searches = len(searches) >= MAX_SEARCHES
+                response = claude.beta.messages.create(
+                    model=MODEL_ID,
+                    max_tokens=16000,
+                    system=system,
+                    tools=[SEARCH_TOOL],
+                    tool_choice={"type": "none"} if out_of_searches else {"type": "auto"},
+                    output_config={"effort": "low"},
+                    messages=messages,
+                )
+                if response.stop_reason != "tool_use" or out_of_searches:
+                    break
 
-            # Claude asked for one or more searches: run them and send the results back.
-            messages.append({"role": "assistant", "content": response.content})
-            results = []
-            for block in response.content:
-                if block.type != "tool_use" or block.name != "search_product_docs":
-                    continue
-                query = block.input.get("query", "")
+                # Claude asked for one or more searches: run them and send the results back.
+                messages.append({"role": "assistant", "content": response.content})
+                results = []
+                for block in response.content:
+                    if block.type != "tool_use" or block.name != "search_product_docs":
+                        continue
+                    query = block.input.get("query", "")
+                    if len(searches) >= MAX_SEARCHES:
+                        content = [{"type": "text", "text": "Search limit reached. Not searched."}]
+                    else:
+                        passages = search_product_docs(query, role, bu)
+                        searches.append({"query": query, "found": [p.get("metadata", {}).get("title") for p in passages]})
+                        content = as_search_results(passages) or [{"type": "text", "text": "No matching documentation."}]
+                    results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
                 if len(searches) >= MAX_SEARCHES:
-                    content = [{"type": "text", "text": "Search limit reached. Answer with what you have."}]
-                else:
-                    passages = search_product_docs(query, role, bu)
-                    searches.append({"query": query, "found": [p.get("metadata", {}).get("title") for p in passages]})
-                    content = as_search_results(passages) or [{"type": "text", "text": "No matching documentation."}]
-                results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
-            messages.append({"role": "user", "content": results})
+                    results.append({"type": "text", "text": "Search limit reached. Answer now with what you have."})
+                messages.append({"role": "user", "content": results})
+    except APIStatusError as e:
+        # Bedrock errors (model access, inference profile, permissions) come back as a readable message.
+        return {"error": f"Bedrock returned {e.status_code}: {e.message}", "searches": searches}
 
     if response.stop_reason == "refusal":
         return {"answer": "Ask AI can't help with that question.", "searches": searches, "stop_reason": "refusal"}
