@@ -1,0 +1,6 @@
+[client]
+# Hide Streamlit's developer menu and Deploy button during the demo.
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false

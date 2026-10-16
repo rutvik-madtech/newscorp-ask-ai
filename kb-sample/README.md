@@ -10,6 +10,8 @@ kb-sample/
     <page>.md              23 product-doc pages, one topic each
     <page>.md.metadata.json  the page's filter tags, read by Bedrock at ingestion
   make_sidecars.py         rebuilds the .metadata.json files from the pages
+  lambda/                  the Ask AI Lambda (Claude + search_product_docs)
+  demo/                    a Streamlit page for demoing the Lambda to the team
   README.md                this file (don't upload it)
 ```
 
