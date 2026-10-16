@@ -6,7 +6,9 @@ Run it with AWS credentials that may invoke the function:
 Optional environment variables:
     ASKAI_FUNCTION  the Lambda function name (default askai-poc)
     AWS_REGION      the function's region (default us-east-1)
+    APP_PASSWORD    a password the page asks for first (the hosted demo sets it)
 """
+import hmac
 import json
 import os
 import time
@@ -88,7 +90,23 @@ def show_result(result, expand_searches=False):
                 st.markdown("\n".join(f"{i}. {title}" for i, title in enumerate(s["found"], 1)))
 
 
+def require_password():
+    """On the hosted demo, ask for the team password before anything else. Local runs have none set."""
+    password = os.environ.get("APP_PASSWORD")
+    if not password or st.session_state.get("signed_in"):
+        return
+    st.title("Ask AI demo")
+    entered = st.text_input("Team password", type="password")
+    if entered and hmac.compare_digest(entered.encode(), password.encode()):
+        st.session_state.signed_in = True
+        st.rerun()
+    if entered:
+        st.error("That password isn't right.")
+    st.stop()
+
+
 st.set_page_config(page_title="Ask AI demo", page_icon="💬", layout="wide")
+require_password()
 
 with st.sidebar:
     st.title("Ask AI")

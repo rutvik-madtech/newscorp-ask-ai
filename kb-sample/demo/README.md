@@ -22,6 +22,7 @@ The page opens at http://localhost:8501. Run it from this folder so Streamlit pi
 | `AWS_PROFILE` | your default profile | Which AWS credentials to use |
 | `AWS_REGION` | `us-east-1` | The function's region |
 | `ASKAI_FUNCTION` | `askai-poc` | The function's name |
+| `APP_PASSWORD` | none | A password the page asks for first. Leave it unset on your laptop |
 
 The credentials only need this permission:
 
@@ -36,7 +37,39 @@ The credentials only need this permission:
 }
 ```
 
-Run it on your own laptop and share your screen. Don't start it with `--server.address 0.0.0.0`: anyone who can reach the page would ask questions with your AWS credentials.
+Don't start it with `--server.address 0.0.0.0`: anyone who can reach the page would ask questions with your AWS credentials. To share it, host it as below.
+
+## Host it for the team
+
+`deploy.sh` puts the app on Amazon ECS Express Mode, which gives it an HTTPS link. The page asks for a team password first, and the app runs as its own role that may only invoke `askai-poc`. App Runner isn't an option: it closed to new customers on April 30, 2026, and it doesn't support the WebSockets Streamlit needs.
+
+1. Zip this folder, including `.streamlit/`, as `askai-demo.zip`.
+2. Open CloudShell in us-east-1, as an admin. Select **Actions → Upload file** and upload the zip.
+3. Run:
+
+   ```bash
+   unzip -o askai-demo.zip -d askai-demo && cd askai-demo
+   APP_PASSWORD='<team password>' bash deploy.sh
+   ```
+
+The script builds the image, pushes it to ECR, and creates the roles, the log group, an ECS cluster and the Express service, all named `askai-demo`. It prints the link when the page answers, 5–10 minutes the first time. Send the team the link and the password. To ship a change to `app.py`, upload it and run the script again.
+
+It runs one task (0.5 vCPU, 1 GB) behind a load balancer. That's roughly $40–60 a month while it runs, plus Bedrock per question. Delete it when the demo period ends:
+
+```bash
+ARN=$(aws ecs list-services --cluster askai-demo --query 'serviceArns[0]' --output text)
+aws ecs delete-express-gateway-service --service-arn "$ARN"
+# Wait until the service is gone (ECS console, or a few minutes), then:
+aws ecs delete-cluster --cluster askai-demo
+aws ecr delete-repository --repository-name askai-demo --force
+aws logs delete-log-group --log-group-name /ecs/askai-demo
+aws iam detach-role-policy --role-name askai-demo-execution --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+aws iam detach-role-policy --role-name askai-demo-infrastructure --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices
+aws iam delete-role-policy --role-name askai-demo-task --policy-name invoke-askai
+for r in execution infrastructure task; do aws iam delete-role --role-name askai-demo-$r; done
+```
+
+Delete the infrastructure role last: ECS uses it to remove the load balancer.
 
 ## The two views
 

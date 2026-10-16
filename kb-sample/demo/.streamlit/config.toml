@@ -2,5 +2,9 @@
 # Hide Streamlit's developer menu and Deploy button during the demo.
 toolbarMode = "viewer"
 
+[server]
+# Ping the browser every 20 seconds, so a load balancer's 60-second idle timeout never drops the page.
+websocketPingInterval = 20
+
 [browser]
 gatherUsageStats = false
