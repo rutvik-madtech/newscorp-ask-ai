@@ -17,11 +17,11 @@ The CDL console has three roles: Power User, Admin and Agency. An Admin sets you
 | Access & roles, Connectors | No | Yes | No |
 
 ## What Agency users don't see
-Agency partners work with audiences that News Corp business units share with them. To protect each business unit's data, the console withholds some details from the Agency role:
-- the names of contributing business units when source obfuscation is on, shown as "Contributing business unit";
-- cross-business-unit overlap percentages, such as the share of people matched in both Dow Jones and Realtor.com data;
-- audience sizes below the minimum population, shown as "Below minimum";
-- record-level data of any kind.
+Agency partners work with audiences that News Corp business units share with them. To protect each business unit's data, the console hides these details from the Agency role:
+- **Contributing business units.** When source obfuscation is on, Agency users can't see which business units contributed data. The console shows "Contributing business unit" in place of each name.
+- **Overlap between business units.** Agency users can't see cross-business-unit overlap percentages, such as the share of people matched in both Dow Jones and Realtor.com data.
+- **Small audience sizes.** Agency users can't see sizes below the minimum population. The console shows "Below minimum" instead.
+- **Record-level data.** Agency users never see record-level data of any kind.
 
 Raw personal data (names, emails, addresses) is never shown to any role and never leaves the CDL.
 
