@@ -38,6 +38,11 @@ aws iam put-role-policy --role-name $NAME-task --policy-name invoke-askai --poli
   "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"lambda:InvokeFunction\",\"Resource\":\"arn:aws:lambda:$REGION:$ACCOUNT:function:$FUNCTION\"}]}"
 aws logs create-log-group --region "$REGION" --log-group-name /ecs/$NAME 2>/dev/null || true
 aws ecs create-cluster --region "$REGION" --cluster-name $NAME >/dev/null
+# An account's first load balancer needs these service-linked roles. If ECS creates them mid-deploy,
+# it can use them before they propagate and the deploy fails, so create them here ("already exists" is fine).
+for service in elasticloadbalancing.amazonaws.com ecs.application-autoscaling.amazonaws.com; do
+  aws iam create-service-linked-role --aws-service-name $service >/dev/null 2>&1 || true
+done
 
 echo "== 3/4 Create or update the service"
 CONTAINER=$(IMAGE=$IMAGE REGION=$REGION FUNCTION=$FUNCTION NAME=$NAME python3 -c '
@@ -51,7 +56,7 @@ print(json.dumps({
 }))')
 ARN=$(aws ecs list-services --region "$REGION" --cluster $NAME --query 'serviceArns[0]' --output text)
 if [ "$ARN" = "None" ] || [ -z "$ARN" ]; then
-  sleep 10  # new IAM roles take a few seconds before ECS can use them
+  sleep 30  # new IAM roles take a little while before AWS services can use them
   # One task only: Streamlit keeps each visitor's session on the task that served the page.
   ARN=$(aws ecs create-express-gateway-service --region "$REGION" --cluster $NAME --service-name $NAME \
     --execution-role-arn arn:aws:iam::$ACCOUNT:role/$NAME-execution \
@@ -81,5 +86,6 @@ for _ in $(seq 1 90); do
   sleep 10
 done
 echo "Not answering yet. Link: ${URL:-not assigned yet}"
-echo "Check ECS -> Clusters -> $NAME -> Services -> $NAME -> Logs, or CloudWatch log group /ecs/$NAME."
+echo "Check ECS -> Clusters -> $NAME -> Services -> $NAME -> Deployments and Logs, or CloudWatch log group /ecs/$NAME."
+echo "If the deployment rolled back with a permissions error on a first run, run this script again."
 exit 1
