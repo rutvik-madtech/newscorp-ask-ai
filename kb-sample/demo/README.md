@@ -43,33 +43,56 @@ Don't start it with `--server.address 0.0.0.0`: anyone who can reach the page wo
 
 `deploy.sh` puts the app on Amazon ECS Express Mode, which gives it an HTTPS link. The page asks for a team password first, and the app runs as its own role that may only invoke `askai-poc`. App Runner isn't an option: it closed to new customers on April 30, 2026, and it doesn't support the WebSockets Streamlit needs.
 
-1. Zip this folder, including `.streamlit/`, as `askai-demo.zip`.
-2. Open CloudShell in us-east-1, as an admin. Select **Actions → Upload file** and upload the zip.
-3. Run:
+1. Zip this folder as `askai-demo.zip`, with `.streamlit/` but without `.venv/`. On a Mac or Linux, from `kb-sample/demo`:
 
    ```bash
-   unzip -o askai-demo.zip -d askai-demo && cd askai-demo
+   zip -r ../askai-demo.zip . -x '.venv/*' '__pycache__/*'
+   ```
+
+2. Open CloudShell as an admin. Select **Actions → Upload file** and upload the zip. Any region works: the script deploys next to the Lambda, in us-east-1.
+3. Run this from your home folder:
+
+   ```bash
+   unzip -o askai-demo.zip -d askai-demo
+   cd "$(dirname "$(find askai-demo -name deploy.sh | head -1)")"
    APP_PASSWORD='<team password>' bash deploy.sh
    ```
 
-The script builds the image, pushes it to ECR, and creates the roles, the log group, an ECS cluster and the Express service, all named `askai-demo`. It prints the link when the page answers, 5–10 minutes the first time. Send the team the link and the password. To ship a change to `app.py`, upload it and run the script again.
+   The `cd` line finds the folder holding `deploy.sh`, so it works whether or not your zip tool added a folder inside the zip.
 
-It runs one task (0.5 vCPU, 1 GB) behind a load balancer. That's roughly $40–60 a month while it runs, plus Bedrock per question. Delete it when the demo period ends:
+The script first checks that the Lambda exists and that the account has a default VPC. It then builds the image, pushes it to ECR, and creates the roles, the log group, an ECS cluster and the Express service, all named `askai-demo`. It prints the link as soon as AWS assigns it, and `Ready` once this version takes all the traffic: 10–15 minutes the first time. Send the team the link and the password. If a first run rolls back with a permissions error while new roles propagate, run it again.
+
+| Variable | Default | When to set it |
+|---|---|---|
+| `ASKAI_REGION` | `us-east-1` | The Lambda is in another region |
+| `ASKAI_FUNCTION` | `askai-poc` | The Lambda has another name |
+| `SUBNETS` | the default VPC | The account has no default VPC. Give two or more public subnet IDs in different AZs, such as `SUBNETS='subnet-aaa,subnet-bbb'` |
+
+To ship a change to `app.py`, upload the new file (CloudShell puts it in your home folder), move it into place and run the script again:
 
 ```bash
-ARN=$(aws ecs list-services --cluster askai-demo --query 'serviceArns[0]' --output text)
-aws ecs delete-express-gateway-service --service-arn "$ARN"
-# Wait until the service is gone (ECS console, or a few minutes), then:
-aws ecs delete-cluster --cluster askai-demo
-aws ecr delete-repository --repository-name askai-demo --force
-aws logs delete-log-group --log-group-name /ecs/askai-demo
+mv ~/app.py ~/askai-demo/app.py && cd ~/askai-demo
+APP_PASSWORD='<team password>' bash deploy.sh
+```
+
+If you changed more than `app.py`, upload a new zip and repeat step 3 from your home folder.
+
+It runs one task (0.5 vCPU, 1 GB) behind a load balancer. That's roughly $40–60 a month while it runs, plus Bedrock per question. Delete it when the demo period ends. Paste the whole block: it waits for ECS to remove the load balancer before deleting the roles ECS needs to do that.
+
+```bash
+R=us-east-1
+ARN=$(aws ecs list-services --region $R --cluster askai-demo --query 'serviceArns[0]' --output text)
+aws ecs delete-express-gateway-service --region $R --service-arn "$ARN" --query service.status.statusCode --output text
+# Wait while ECS stops the task and removes the load balancer (a few minutes)
+while s=$(aws ecs describe-express-gateway-service --region $R --service-arn "$ARN" --query service.status.statusCode --output text 2>/dev/null) && [ "$s" != INACTIVE ]; do echo "$s..."; sleep 15; done
+aws ecs delete-cluster --region $R --cluster askai-demo --query cluster.status --output text
+aws ecr delete-repository --region $R --repository-name askai-demo --force --query repository.repositoryName --output text
+aws logs delete-log-group --region $R --log-group-name /ecs/askai-demo
 aws iam detach-role-policy --role-name askai-demo-execution --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 aws iam detach-role-policy --role-name askai-demo-infrastructure --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices
 aws iam delete-role-policy --role-name askai-demo-task --policy-name invoke-askai
-for r in execution infrastructure task; do aws iam delete-role --role-name askai-demo-$r; done
+for r in execution task infrastructure; do aws iam delete-role --role-name askai-demo-$r; done
 ```
-
-Delete the infrastructure role last: ECS uses it to remove the load balancer.
 
 ## The two views
 

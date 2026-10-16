@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
+grep -q $'\r' "$0" && { echo "deploy.sh has Windows line endings. Run: sed -i 's/\r$//' deploy.sh, then run it again."; exit 1; } #
 # Hosts the Ask AI demo on Amazon ECS Express Mode and prints the link for the team.
 # Run it in CloudShell, from the folder with app.py and the Dockerfile:
 #   APP_PASSWORD='<team password>' bash deploy.sh
 # Running it again ships the current app.py to the same link.
+# Optional: ASKAI_REGION (default us-east-1), ASKAI_FUNCTION (default askai-poc),
+# SUBNETS='subnet-a,subnet-b' (public subnets in two or more AZs) for an account without a default VPC.
 set -euo pipefail
 
-REGION=${AWS_REGION:-us-east-1}
+# The Lambda's region. CloudShell sets AWS_REGION to whatever region it was opened in, so don't use that.
+REGION=${ASKAI_REGION:-us-east-1}
 FUNCTION=${ASKAI_FUNCTION:-askai-poc}
 NAME=askai-demo
 : "${APP_PASSWORD:?Set the password the team will type: APP_PASSWORD='...' bash deploy.sh}"
+
+# Check what would make step 3 fail before building or creating anything.
+aws lambda get-function --region "$REGION" --function-name "$FUNCTION" >/dev/null 2>&1 || {
+  echo "No Lambda $FUNCTION in $REGION. Set ASKAI_REGION to the function's region." >&2
+  exit 1
+}
+NETWORK=()
+if [ -n "${SUBNETS:-}" ]; then
+  NETWORK=(--network-configuration "{\"subnets\":[\"${SUBNETS//,/\",\"}\"]}")
+elif [ "$(aws ec2 describe-subnets --region "$REGION" --filters Name=default-for-az,Values=true \
+          --query 'length(Subnets)' --output text)" = 0 ]; then
+  echo "This account has no default VPC in $REGION, which ECS Express Mode uses by default." >&2
+  echo "Ask your AWS admin for two public subnet IDs in $REGION, then run: SUBNETS='subnet-aaa,subnet-bbb' APP_PASSWORD='...' bash deploy.sh" >&2
+  exit 1
+fi
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 REGISTRY=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com
@@ -64,28 +83,36 @@ if [ "$ARN" = "None" ] || [ -z "$ARN" ]; then
     --task-role-arn arn:aws:iam::$ACCOUNT:role/$NAME-task \
     --primary-container "$CONTAINER" --health-check-path /_stcore/health \
     --cpu 512 --memory 1024 --scaling-target '{"minTaskCount":1,"maxTaskCount":1}' \
+    ${NETWORK[@]+"${NETWORK[@]}"} \
     --query service.serviceArn --output text)
 else
   aws ecs update-express-gateway-service --region "$REGION" --service-arn "$ARN" \
     --primary-container "$CONTAINER" >/dev/null
 fi
 
-echo "== 4/4 Wait for the link to answer (5-10 minutes the first time)"
+echo "== 4/4 Wait for this version to go live (10-15 minutes the first time)"
+# ECS moves traffic over in stages. Until only this run's image is active, part of the traffic
+# still goes to the previous version, so wait for that before testing the link.
 URL=""
-for _ in $(seq 1 90); do
-  HOST=$(aws ecs describe-express-gateway-service --region "$REGION" --service-arn "$ARN" \
-    --query 'service.activeConfigurations[0].ingressPaths[0].endpoint' --output text 2>/dev/null || true)
-  if [ -n "$HOST" ] && [ "$HOST" != "None" ]; then
+for _ in $(seq 1 80); do  # about 15 minutes
+  STATE=$(aws ecs describe-express-gateway-service --region "$REGION" --service-arn "$ARN" \
+    --query '[length(service.activeConfigurations), service.activeConfigurations[0].primaryContainer.image, service.activeConfigurations[0].ingressPaths[0].endpoint]' \
+    --output text 2>/dev/null || true)
+  read -r COUNT LIVE HOST <<<"$STATE" || true
+  if [ -z "$URL" ] && [ -n "${HOST:-}" ] && [ "$HOST" != "None" ]; then
     URL="https://${HOST#https://}"
-    if curl -fsS -m 10 "$URL/_stcore/health" >/dev/null 2>&1; then
-      echo "Ready: $URL"
-      echo "The team signs in with the APP_PASSWORD you set. A redeploy takes a few more minutes to replace the old version."
-      exit 0
-    fi
+    echo "Link (answers once this version is live): $URL"
   fi
+  if [ "${COUNT:-}" = 1 ] && [ "${LIVE:-}" = "$IMAGE" ] && [ -n "$URL" ] \
+     && curl -fsS -m 10 "$URL/_stcore/health" >/dev/null 2>&1; then
+    echo; echo "Ready: $URL"
+    echo "The team signs in with the APP_PASSWORD you set."
+    exit 0
+  fi
+  printf .
   sleep 10
 done
-echo "Not answering yet. Link: ${URL:-not assigned yet}"
+echo; echo "This version isn't live yet. Link: ${URL:-not assigned yet}"
 echo "Check ECS -> Clusters -> $NAME -> Services -> $NAME -> Deployments and Logs, or CloudWatch log group /ecs/$NAME."
 echo "If the deployment rolled back with a permissions error on a first run, run this script again."
 exit 1

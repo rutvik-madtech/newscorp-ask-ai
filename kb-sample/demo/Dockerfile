@@ -1,4 +1,5 @@
-FROM python:3.13-slim
+# Docker's official Python image, from ECR Public: no Docker Hub pull limits in CloudShell.
+FROM public.ecr.aws/docker/library/python:3.13-slim
 
 WORKDIR /app
 COPY requirements.txt .
