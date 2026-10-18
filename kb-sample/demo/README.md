@@ -2,7 +2,7 @@
 
 A small Streamlit page for showing Ask AI to the team. It sends each question to the `askai-poc` Lambda exactly as the portal backend will (question, role, business unit) and shows Claude's answer, the pages it cited and what it searched.
 
-**It answers from the sample docs in `kb-sample/docs`, not real CDL documentation.**
+**It answers from the sample help articles in `kb-sample/docs`, written from the console design.**
 
 ## Run it
 
@@ -96,15 +96,15 @@ for r in execution task infrastructure; do aws iam delete-role --role-name askai
 
 ## The two views
 
-- **Ask:** a chat. Pick a role and business unit in the sidebar, then type a question or select a sample. Each question is answered on its own; Ask AI doesn't remember earlier ones.
-- **Compare:** one question asked for every role, or in every business unit, side by side. **What Ask AI searched** is open in each column, so you can see which pages each user's search returned.
+- **Ask:** a chat. Pick a role and what you're acting as in the sidebar, then type a question or select a sample. Each question is answered on its own; Ask AI doesn't remember earlier ones.
+- **Compare:** one question asked as a Power User and as an Agency user, side by side. **What Ask AI searched** is open in each column, so you can see which help articles each role's search returned.
 
 Each answer takes 5–15 seconds and costs a few cents in Bedrock.
 
 ## A five-minute demo
 
-1. **A how-to.** Ask view, Power User, Dow Jones: "How do I approve a request from Realtor.com?" Ask AI gives the steps from the Rules of Use page and cites it.
-2. **The same question as Agency.** Switch the role to Agency and ask again. Ask AI says Agency users can't approve requests, citing What each role can see. Open **What Ask AI searched**: the Rules of Use page isn't there, because the search never returns it for Agency.
-3. **Side by side.** Compare view, demo "Approving requests, by role", **Run**. Power User and Admin find the Rules of Use page; Agency doesn't.
-4. **Business units.** Demo "Realtor.com signals, by business unit". The Realtor.com column lists the three signals; the Dow Jones column says the docs it can see don't list them.
-5. **What it won't do.** Ask view: "How many people are in my C-suite audience?" (it can't see live data and points to the Audiences page), then "Write me a poem about data" (declined without a search).
+1. **A how-to.** Ask view, Power User: "How do I approve a request?" Ask AI gives the steps from Approve a request and cites it.
+2. **The same question as Agency.** Switch the role to Agency and ask again. Ask AI says only Power Users approve requests, and explains how approval of an agency's own request works. Open **What Ask AI searched**: no Rules of Use article is there, because the search never returns them for Agency.
+3. **Side by side.** Compare view, demo "Requesting an audience", **Run**. The Agency column gives the steps from Request a portfolio audience; the Power User column says that is the agency flow and points to creating an audience.
+4. **Getting in.** Ask view, either role: "I forgot my password", then "How do I give someone access to the console?" (Power Users get Admin > Access & roles, agency users get Request access).
+5. **What it won't do.** "How many people are in my audience?" (it can't see live figures and says where the size is shown), then "Write me a poem about data" (declined without a search).

@@ -2,17 +2,14 @@
   "metadataAttributes": {
     "title": "Audience gates",
     "doc_type": "concept",
-    "pillar": "audiences",
+    "pillar": "concepts",
     "allowed_tiers": [
-      "Power User",
-      "Admin",
-      "Agency"
+      "Power User"
     ],
     "tier_power_user": true,
-    "tier_admin": true,
-    "tier_agency": true,
+    "tier_agency": false,
     "business_unit": "all",
     "console_link": "/audiences",
-    "source_updated_at": "2026-10-01"
+    "source_updated_at": "2026-10-18"
   }
 }

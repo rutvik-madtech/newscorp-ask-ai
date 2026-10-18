@@ -1,0 +1,16 @@
+{
+  "metadataAttributes": {
+    "title": "Roles: Power User and Agency",
+    "doc_type": "concept",
+    "pillar": "getting_started",
+    "allowed_tiers": [
+      "Power User",
+      "Agency"
+    ],
+    "tier_power_user": true,
+    "tier_agency": true,
+    "business_unit": "all",
+    "console_link": "All pages \u00b7 sidebar role chip",
+    "source_updated_at": "2026-10-18"
+  }
+}

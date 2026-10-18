@@ -1,28 +1,32 @@
 # Ask AI sample knowledge base
 
-**Sample content for testing Ask AI. This is not real CDL product documentation.** The pages mirror the screens, roles and terms in the CDL portal code (`cdl_ui`, branch `hetvi-ui-setup`), so retrieval, citations and tier filtering can be tested before the real docs are written. Figures and rules in the pages (such as the 1,000-person minimum population) are made up.
+**Sample help articles for testing Ask AI.** They are written from the News Corp Data Dexterity Layer console design (Mockups v3), the way a support centre is written: where things are, how to do them in the UI, what terms and statuses mean, who can do what, FAQs and troubleshooting. They contain no numbers, statistics or sample data, and quote UI labels exactly as the design shows them. When the design changes, the articles need checking against it.
 
 ## What's here
 
 ```
 kb-sample/
   docs/                    upload the contents of this folder to S3, nothing else
-    <page>.md              23 product-doc pages, one topic each
-    <page>.md.metadata.json  the page's filter tags, read by Bedrock at ingestion
-  make_sidecars.py         rebuilds the .metadata.json files from the pages
+    <article>.md           94 help articles, one topic each
+    <article>.md.metadata.json  the article's filter tags, read by Bedrock at ingestion
+  make_sidecars.py         rebuilds the .metadata.json files from the articles
   lambda/                  the Ask AI Lambda (Claude + search_product_docs)
   demo/                    a Streamlit page for demoing the Lambda to the team
   README.md                this file (don't upload it)
 ```
 
-## How pages are tagged
+## How articles are tagged
 
-Each page starts with three lines, as the plan's doc template asks (§2):
+Each article starts with its title and five lines:
 
 ```
-Applies to tier: Power User, Admin, Agency
+# Approve a request
+
+Applies to tier: Power User
 Business unit: all
-Console page: /audiences
+Console page: /rules-of-use
+Article type: how_to
+Category: rules_of_use
 ```
 
 `make_sidecars.py` turns them into the sidecar Bedrock ingests, the same job the publish job does in the plan (§2.1):
@@ -30,52 +34,65 @@ Console page: /audiences
 ```json
 {
   "metadataAttributes": {
-    "title": "Build an audience",
+    "title": "Approve a request",
     "doc_type": "how_to",
-    "pillar": "audiences",
-    "allowed_tiers": ["Power User", "Admin", "Agency"],
+    "pillar": "rules_of_use",
+    "allowed_tiers": ["Power User"],
     "tier_power_user": true,
-    "tier_admin": true,
-    "tier_agency": true,
+    "tier_agency": false,
     "business_unit": "all",
-    "console_link": "/audiences",
-    "source_updated_at": "2026-10-01"
+    "console_link": "/rules-of-use",
+    "source_updated_at": "2026-10-18"
   }
 }
 ```
 
-- **`allowed_tiers`** uses the portal's role names exactly as `/api/auth/me` returns them, so the Lambda can pass the role straight into the filter.
-- **`tier_power_user`, `tier_admin`, `tier_agency`** carry the same information as one flag per role, filtered with `equals`. The Lambda uses these by default (`TIER_FILTER` = `flags`): the console test panel can't test a list filter, and S3 Vectors may ignore `listContains` without an error (plan §5.3). Switch to `list` only after the CloudShell test in the console guide shows the list filter hides internal pages.
-- **If a sync warns `Ignored N files due to invalid metadata attributes`**, the S3 vector store rejected the `allowed_tiers` list. Remove that attribute from the tag files and sync again; the flags still carry the roles.
-- **A page with no tier line gets Power User and Admin only.** `release-notes.md` has none, on purpose, to test that a missing tag fails safe.
+- **Roles.** The design has two roles: **Power User** (internal, works as one business unit) and **Agency** (external, finds, sizes and requests portfolio audiences). Admin is a sidebar section for Power Users, not a role. `allowed_tiers` uses the role names exactly as the portal sends them.
+- **`tier_power_user`, `tier_agency`** carry the same information as one flag per role, filtered with `equals`. The Lambda uses these by default (`TIER_FILTER` = `flags`). In the test account, S3 Vectors also applied `listContains` on `allowed_tiers` correctly, so `list` works there too.
+- **An article with no tier line gets Power User only**, so a missing tag never shows an article to Agency users.
+- **Business unit.** Every article is `all`: the help is the same for each business unit. The tag stays so business-unit-specific articles can be added later. Their names must match what the portal backend sends from `GET /business-units`.
+- **Article types:** `getting_started`, `how_to`, `concept`, `reference`, `faq`, `troubleshooting`.
 
-After editing a page, run `python3 make_sidecars.py` and upload both files again.
+After editing an article, run `python3 make_sidecars.py` and upload both files again.
 
 ## Coverage
 
-| Who can see it | Pages |
-|---|---|
-| All roles (15) | getting-started, glossary, roles-and-access, overview-page, taxonomy, build-an-audience, audience-gates, matched-vs-modelled, analysis-runs, delivery-destinations, permissible-use-envelope, delivery-troubleshooting, faq, bu-dow-jones (Dow Jones only), bu-realtor (Realtor.com only) |
-| Power User and Admin (6) | rules-of-use-approvals, gating-rules, agent-endpoint, consent-ledger, audit-trail, release-notes (no tier line) |
-| Admin only (2) | admin-access-roles, admin-connectors |
+| Category | Articles | Visible to |
+|---|---|---|
+| Sign in and access | 5 | Both roles |
+| Getting started | 4 | One per role, plus roles and the general FAQ for both |
+| Ask AI and AI suggestions | 5 | Ask AI articles for both roles; AI suggestions for Power Users |
+| Portfolio audiences | 6 | Agency only |
+| Overview and navigation | 6 | Power User |
+| Key concepts and glossary | 7 | Power User |
+| Taxonomy | 5 | Power User |
+| Audiences | 16 | Power User |
+| Analysis | 14 | Power User |
+| Rules of Use | 9 | Power User |
+| Delivery | 10 | Power User |
+| Admin: access and connectors | 7 | Power User |
 
-## Test cases this set is built for
+In all: 76 articles for Power Users only, 7 for Agency only, 11 for both.
 
-A search always returns up to 8 chunks from the pages the role and business unit may see, so a restricted question still gets an answer from the pages that are visible. The real check is the last column: those pages must never come back for that role or business unit.
+## Test cases
 
-| Question | Role | Business unit | Expected answer | Must never come back |
-|---|---|---|---|---|
-| How do I build a Cross-BU audience? | Agency | Dow Jones | Steps from build-an-audience, and that Cross-BU audiences are built by Power Users and Admins | |
-| How do I approve a request from Realtor.com? | Power User | Dow Jones | Steps from rules-of-use-approvals | |
-| How do I approve a request from Realtor.com? | Agency | Dow Jones | Agency users can't approve requests (from roles-and-access) | rules-of-use-approvals |
-| What signals does Realtor.com contribute? | Agency | Realtor.com | The three signals from bu-realtor | |
-| What signals does Realtor.com contribute? | Agency | Dow Jones | At most a general mention from taxonomy, not the signal list | bu-realtor |
-| How do I add a user? | Power User | Dow Jones | Power Users can't manage users; ask an Admin (from roles-and-access) | admin-access-roles |
-| How do I add a user? | Admin | Dow Jones | Steps from admin-access-roles | |
-| What changed in the September release? | Agency | Dow Jones | Found no release notes | release-notes |
-| My Permutive delivery failed. What do I do? | Any | Any | Steps from delivery-troubleshooting | |
-| What does an index of 2.3 mean? | Any | Any | 2.3 times as common as average, from analysis-runs or glossary | |
-| How many people are in my C-suite audience? | Any | Any | Declined: live numbers aren't available in Ask AI | |
-| Write me a poem about data | Any | Any | Declined as off-topic, without a search | |
+A search always returns up to 8 passages the role may see, so a question about another role's feature still gets an answer from what is visible. The real check is the last column: those articles must never come back for that role.
 
-The business-unit values in the tags (`Dow Jones`, `Realtor.com`) must match the names the portal backend sends from `GET /business-units`. Check them with the portal team before using real docs.
+| Question | Role | Expected answer | Must never come back |
+|---|---|---|---|
+| How do I approve a request? | Power User | Steps from Approve a request | |
+| How do I approve a request? | Agency | Only Power Users approve; how approval of the agency's own request works | Approve a request, Rules of Use FAQ |
+| How do I request a portfolio audience? | Agency | Steps from Request a portfolio audience | |
+| How do I request a portfolio audience? | Power User | That is the agency flow; create an audience instead | Request a portfolio audience |
+| I forgot my password | Either | Steps from Reset your password | |
+| What does Suppressed mean? | Power User | From Minimum population and suppressed figures | |
+| Where do I see why a delivery failed? | Power User | From Fix a failed delivery | |
+| Where do I see why a delivery failed? | Agency | Delivery isn't part of the Agency role | Fix a failed delivery |
+| How do I give someone access to the console? | Power User | From Invite a person or disable access | |
+| How do I give someone access to the console? | Agency | From Request access to the console | Invite a person or disable access |
+| A connector shows Stale. What do I do? | Power User | From Data may be out of date: a feed is Stale | |
+| How do I switch the business unit I'm working in? | Power User | From Switch the business unit you're acting as | |
+| How many people are in my audience? | Either | Declined: Ask AI can't see live figures; where the size is shown | |
+| Write me a poem about data | Either | Declined as off-topic, without a search | |
+
+All of these passed against the live Knowledge Base on 2026-10-18, with no article shown to the wrong role.

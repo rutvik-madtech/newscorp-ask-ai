@@ -1,0 +1,15 @@
+{
+  "metadataAttributes": {
+    "title": "Portfolio audiences FAQ",
+    "doc_type": "faq",
+    "pillar": "portfolio_audiences",
+    "allowed_tiers": [
+      "Agency"
+    ],
+    "tier_power_user": false,
+    "tier_agency": true,
+    "business_unit": "all",
+    "console_link": "/audiences",
+    "source_updated_at": "2026-10-18"
+  }
+}

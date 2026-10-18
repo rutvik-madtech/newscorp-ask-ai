@@ -1,0 +1,15 @@
+{
+  "metadataAttributes": {
+    "title": "Your gating rules",
+    "doc_type": "concept",
+    "pillar": "rules_of_use",
+    "allowed_tiers": [
+      "Power User"
+    ],
+    "tier_power_user": true,
+    "tier_agency": false,
+    "business_unit": "all",
+    "console_link": "/rules-of-use",
+    "source_updated_at": "2026-10-18"
+  }
+}

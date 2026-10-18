@@ -1,0 +1,15 @@
+{
+  "metadataAttributes": {
+    "title": "Request a portfolio audience",
+    "doc_type": "how_to",
+    "pillar": "portfolio_audiences",
+    "allowed_tiers": [
+      "Agency"
+    ],
+    "tier_power_user": false,
+    "tier_agency": true,
+    "business_unit": "all",
+    "console_link": "/audiences",
+    "source_updated_at": "2026-10-18"
+  }
+}

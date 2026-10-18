@@ -1,0 +1,16 @@
+{
+  "metadataAttributes": {
+    "title": "Ask AI: open the panel and ask a question",
+    "doc_type": "how_to",
+    "pillar": "ask_ai",
+    "allowed_tiers": [
+      "Power User",
+      "Agency"
+    ],
+    "tier_power_user": true,
+    "tier_agency": true,
+    "business_unit": "all",
+    "console_link": "Header > Ask AI (all pages)",
+    "source_updated_at": "2026-10-18"
+  }
+}

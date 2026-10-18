@@ -1,0 +1,16 @@
+{
+  "metadataAttributes": {
+    "title": "Can't sign in or didn't get a reset email",
+    "doc_type": "troubleshooting",
+    "pillar": "account",
+    "allowed_tiers": [
+      "Power User",
+      "Agency"
+    ],
+    "tier_power_user": true,
+    "tier_agency": true,
+    "business_unit": "all",
+    "console_link": "/login",
+    "source_updated_at": "2026-10-18"
+  }
+}

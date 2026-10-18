@@ -1,0 +1,15 @@
+{
+  "metadataAttributes": {
+    "title": "What happens to an advertiser's seed file",
+    "doc_type": "concept",
+    "pillar": "audiences",
+    "allowed_tiers": [
+      "Power User"
+    ],
+    "tier_power_user": true,
+    "tier_agency": false,
+    "business_unit": "all",
+    "console_link": "/audiences",
+    "source_updated_at": "2026-10-18"
+  }
+}

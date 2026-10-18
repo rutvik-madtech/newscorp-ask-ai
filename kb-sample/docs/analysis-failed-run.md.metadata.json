@@ -1,0 +1,15 @@
+{
+  "metadataAttributes": {
+    "title": "Why did my analysis run fail?",
+    "doc_type": "troubleshooting",
+    "pillar": "analysis",
+    "allowed_tiers": [
+      "Power User"
+    ],
+    "tier_power_user": true,
+    "tier_agency": false,
+    "business_unit": "all",
+    "console_link": "/analysis",
+    "source_updated_at": "2026-10-18"
+  }
+}
