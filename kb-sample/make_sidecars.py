@@ -1,9 +1,9 @@
 """Write a Bedrock Knowledge Base metadata sidecar next to every page in docs/.
 
 Does what the publish job in the plan (§2.1) does: reads each page's
-"Applies to tier:", "Business unit:", "Console page:" and "Article type:" lines
-and writes <page>.md.metadata.json. A page with no tier line gets Power User
-only, so a missing tag never exposes a page to Agency users.
+"Applies to tier:", "Business unit:", "Console page:", "Article type:" and
+"Category:" lines and writes <page>.md.metadata.json. A page with no tier line
+gets Power User only, so a missing tag never exposes a page to Agency users.
 
 Run from this folder:  python3 make_sidecars.py
 """
@@ -47,7 +47,7 @@ def main():
         attrs = {
             "title": title,
             "doc_type": doc_type,
-            "pillar": pillar(link),
+            "pillar": line(text, "Category") or pillar(link),
             "allowed_tiers": tiers,
             # One flag per role as well, in case the vector store can't filter a list (plan §5.3).
             "tier_power_user": "Power User" in tiers,

@@ -22,26 +22,27 @@ from botocore.config import Config
 FUNCTION_NAME = os.environ.get("ASKAI_FUNCTION", "askai-poc")
 REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 
-ROLES = ["Power User", "Admin", "Agency"]
-BUSINESS_UNITS = ["Dow Jones", "Realtor.com"]
+ROLES = ["Power User", "Agency"]
+# The "Acting as" choices each role has in the console.
+ACTING_AS = {"Power User": ["Dow Jones", "Realtor.com"], "Agency": ["News Corp portfolio", "Realtor.com"]}
 
 SAMPLE_QUESTIONS = [
-    "How do I build a Cross-BU audience?",
-    "How do I approve a request from Realtor.com?",
-    "What signals does Realtor.com contribute?",
-    "How do I add a user?",
-    "My Permutive delivery failed. What do I do?",
-    "What does an index of 2.3 mean?",
-    "How many people are in my C-suite audience?",
+    "How do I approve a request?",
+    "Where do I see why a delivery failed?",
+    "What does Suppressed mean?",
+    "How do I request a portfolio audience?",
+    "How do I give someone access to the console?",
+    "I forgot my password",
+    "How many people are in my audience?",
     "Write me a poem about data",
 ]
 
-# Each preset shows one filter: the same question asked by every role, or in every business unit.
+# Each preset asks the same question as each role, side by side, to show the role filter.
 COMPARE_PRESETS = {
-    "Approving requests, by role": ("How do I approve a request from Realtor.com?", "Roles"),
-    "Adding a user, by role": ("How do I add a user?", "Roles"),
-    "Realtor.com signals, by business unit": ("What signals does Realtor.com contribute?", "Business units"),
-    "Your own question": ("", "Roles"),
+    "Approving a request": "How do I approve a request?",
+    "Requesting an audience": "How do I request a portfolio audience?",
+    "Giving someone access": "How do I give someone access to the console?",
+    "Your own question": "",
 }
 
 
@@ -112,21 +113,21 @@ with st.sidebar:
     st.title("Ask AI")
     mode = st.radio("View", ["Ask", "Compare"], horizontal=True)
     st.subheader("Signed in as")
-    role = st.selectbox("Role", ROLES, index=2)
-    bu = st.selectbox("Business unit", BUSINESS_UNITS)
+    role = st.selectbox("Role", ROLES)
+    bu = st.selectbox("Acting as", ACTING_AS[role], key=f"acting-as-{role}")
     if mode == "Ask" and st.button("Clear conversation", width="stretch"):
         st.session_state.history = []
     st.divider()
     st.markdown(
-        "**How it works.** Claude searches the product docs through one tool, `search_product_docs`. "
-        "Every search is filtered to the pages the role and business unit may see, so restricted pages "
-        "never reach Claude. Each question is answered on its own."
+        "**How it works.** Claude searches the console's help articles through one tool, `search_product_docs`. "
+        "Every search is filtered to the articles the role may see, so restricted articles never reach Claude. "
+        "Each question is answered on its own."
     )
-    st.caption(f"Lambda `{FUNCTION_NAME}` in {REGION}. Sample docs, not real CDL documentation.")
+    st.caption(f"Lambda `{FUNCTION_NAME}` in {REGION}. Sample help articles written from the console design.")
 
 if mode == "Ask":
-    st.header("Ask about the CDL console")
-    st.caption("Pick a role and business unit on the left, then ask a question or try one of these.")
+    st.header("Ask about the console")
+    st.caption("Pick a role on the left, then ask a question or try one of these.")
     history = st.session_state.setdefault("history", [])
 
     picked = None
@@ -142,7 +143,7 @@ if mode == "Ask":
         with st.chat_message("assistant"):
             show_result(turn["result"])
 
-    question = st.chat_input("Ask a question about the CDL console") or picked
+    question = st.chat_input("Ask a question about the console") or picked
     if question:
         with st.chat_message("user"):
             st.markdown(question)
@@ -154,27 +155,23 @@ if mode == "Ask":
         history.append({"question": question, "role": role, "bu": bu, "result": result})
 
 else:
-    st.header("Compare what each user sees")
-    st.caption("Ask one question for every role, or in every business unit, side by side.")
+    st.header("Compare what each role sees")
+    st.caption("Ask one question as a Power User and as an Agency user, side by side.")
     preset = st.selectbox("Demo", list(COMPARE_PRESETS))
-    preset_question, preset_by = COMPARE_PRESETS[preset]
-    question = st.text_input("Question", value=preset_question, key=f"compare-question-{preset}")
-    by = st.radio("Compare", ["Roles", "Business units"], horizontal=True,
-                  index=["Roles", "Business units"].index(preset_by), key=f"compare-by-{preset}")
-    st.caption(f"Each role in {bu}." if by == "Roles" else f"{role} in each business unit.")
+    question = st.text_input("Question", value=COMPARE_PRESETS[preset], key=f"compare-question-{preset}")
 
     if st.button("Run", type="primary", disabled=not question.strip()):
-        cases = [(r, bu) for r in ROLES] if by == "Roles" else [(role, b) for b in BUSINESS_UNITS]
+        cases = [(r, bu if r == role else ACTING_AS[r][0]) for r in ROLES]
         with st.spinner(f"Asking {len(cases)} times in parallel…"):
             with ThreadPoolExecutor(len(cases)) as pool:
                 results = list(pool.map(lambda case: ask(question.strip(), *case), cases))
-        st.session_state.compare = {"question": question.strip(), "by": by, "cases": cases, "results": results}
+        st.session_state.compare = {"question": question.strip(), "cases": cases, "results": results}
 
     shown = st.session_state.get("compare")
     if shown:
         st.subheader(f"“{shown['question']}”")
         for column, (r, b), result in zip(st.columns(len(shown["cases"])), shown["cases"], shown["results"]):
             with column:
-                st.markdown(f"#### {r if shown['by'] == 'Roles' else b}")
-                st.caption(f"{r} · {b}")
+                st.markdown(f"#### {r}")
+                st.caption(f"Acting as {b}")
                 show_result(result, expand_searches=True)
