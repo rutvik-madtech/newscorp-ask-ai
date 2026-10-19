@@ -18,14 +18,14 @@ Epic: [NWS1-103](https://madconnectai.atlassian.net/browse/NWS1-103). UI host: [
   - **Power User** (internal): "Works as one business unit. Creates definitions, approves or declines requests for that unit, delivers." Sees Overview, Taxonomy, Audiences, Analysis, Rules of Use, Delivery and the Admin section.
   - **Agency** (external): "Finds, sizes and requests portfolio audiences. Never sees contributing properties or edits anything." Sees only Audiences (the **Portfolio audiences** page), plus Ask AI.
   - **Admin is a sidebar section for Power Users** (Access & roles, Connectors), not a role. The `cdl_ui` branch read for this plan also has an Admin role; the role list follows the design (open question 8).
-- **Business units.** The `cdl_ui` code has a "Business unit" dropdown. The list comes from `GET /api/business-units` (the units the user may work in), and business-unit-scoped calls pass the selected unit as `?bu=`. In the v3 design the selector is **Acting as** at the top of the sidebar: Power Users pick the business unit they work as (Dow Jones or Realtor.com), and Agency users see News Corp portfolio or Realtor.com.
+- **Business units.** The `cdl_ui` code has a "Business unit" dropdown. The list comes from `GET /api/business-units` (the units the user may work in), and business-unit-scoped calls pass the selected unit as `?bu=`. In the v3 design the selector is **Acting as** at the top of the sidebar: Power Users pick the business unit they work as (Dow Jones or Realtor.com), and for Agency users **Acting as** is greyed out and set to News Corp portfolio (its list also holds Realtor.com), so they can't switch it.
 - **Ask AI button.** The layout already has an Ask AI button, with nothing behind it yet. In the v3 design it sits in the header of every page, for both roles, and opens the **Ask AI · about this page** panel on the right.
 
 ---
 
 ## 1. What Ask AI has to answer
 
-Users' questions fall into five groups. Ask AI answers the first two and declines the other three clearly. Claude makes that call itself on its first step, before any search; there is no separate filter in front of it (§5.3).
+Users' questions fall into five groups. Ask AI answers the first two and declines the other three clearly. Claude makes that call itself; there is no separate filter in front of it (§5.3). It declines off-topic questions before any search, and may search for a data question to find the console page that shows the answer.
 
 | # | Question type | Example | What Ask AI does |
 |---|---|---|---|
@@ -56,7 +56,7 @@ Ask AI uses **one Bedrock Knowledge Base** over the console's help articles, wri
 | How-to articles, one task each, for every console page: Overview, Taxonomy, Audiences, Analysis, Rules of Use, Delivery, Admin (Access & roles, Connectors), and Portfolio audiences for Agency users | Markdown in Git or a Confluence space | Product / BA |
 | Concepts and glossary: the console's terms and statuses, such as the identity spine, matched and modelled, minimum population and suppressed figures, gates, roles, business units | Markdown | Product |
 | Who can do what, in plain language: the two roles, what each sees, Acting as, what Ask AI can see and do, consent rules | Markdown, derived from NWS1-99 | Governance |
-| Getting started, sign in and access, FAQs, troubleshooting, release notes | Markdown | Product / Support |
+| Getting started, sign in and access, FAQs, troubleshooting | Markdown | Product / Support |
 | Use-case guides that follow the design's end-to-end flows: a portfolio question asked in Analysis, and an advertiser seed file matched, extended and delivered. Super Segments, Profile Score and Dashboards (NWS1-104) aren't in the v3 design; they get guides once they are | Markdown | Product |
 
 > **Biggest risk: content.** A sample set now exists for testing: `kb-sample/docs` holds 94 help articles written from the v3 console design (76 for Power Users only, 7 for Agency only, 11 for both). The production docs still need a content workstream with agreed owners, and the articles need checking against the design whenever it changes.
@@ -77,7 +77,7 @@ Category: rules_of_use
 
 - **Applies to tier:** `Power User`, `Agency`, or both. An article without the line is for Power Users only.
 - **Business unit:** `all` on every article today, because the help is the same for each business unit. The line stays so business-unit-specific articles can be added later.
-- **Console page:** the screen the article describes.
+- **Console page:** the console route of the screen the article describes, such as `/rules-of-use`. An article not tied to one page (a glossary, the roles article, the Ask AI articles) leaves the line out or uses `/`.
 - **Article type:** `getting_started`, `how_to`, `concept`, `reference`, `faq` or `troubleshooting`.
 - **Category:** the area of the console, such as `rules_of_use` or `portfolio_audiences`.
 
@@ -115,7 +115,7 @@ How the sidecar fields are set (`kb-sample/make_sidecars.py` does the same for t
 - **`allowed_tiers`** comes from the page's "Applies to tier:" line, using the portal's role names exactly (`Power User`, `Agency`). A page without one gets Power User only, never Agency, so a missing tag fails safe.
 - **`tier_power_user`** and **`tier_agency`** carry the same information as one flag per role, for an `equals` filter (§5.3).
 - **`business_unit`** comes from the "Business unit:" line. It is `all` unless the page is about one business unit, and today every article is `all`. Names must match what `GET /api/business-units` returns.
-- **`console_link`** comes from the "Console page:" line and lets an answer link to the console screen it describes.
+- **`console_link`** comes from the "Console page:" line and lets an answer link to the console screen it describes. A page without the line gets `/`. The panel links only values that are paths (starting with `/`).
 - **`doc_type`** and **`pillar`** come from the "Article type:" and "Category:" lines, and **`title`** from the H1, so citations show the article's title.
 
 Bedrock KB also has a native Confluence connector. It's worth a short spike if the docs live in Confluence, but only if it can carry a per-page tier tag. Otherwise use the publish job.
@@ -149,7 +149,7 @@ A Bedrock KB needs a vector store to hold the chunks, their embeddings and the m
 **Why semantic search is enough for product docs.**
 - Product docs are prose written for people, and semantic search with reranking handles prose well.
 - Hybrid search mainly helps with exact identifiers such as table and column names, which product docs rarely depend on.
-- The acronyms and coined terms that do appear in the docs (Cross-BU, MCP, the spine, Insights only) are covered two ways. Each has a glossary entry, the main ones have a concept article of their own, and Claude writes the search query, so it can expand acronyms and add synonyms.
+- The acronyms and coined terms that do appear in the docs (Cross-BU, MCP, the spine, Insights only) are covered two ways: each is defined in a glossary or in a terms-and-statuses reference article (the main ones also have a concept article of their own), and Claude writes the search query, so it can expand acronyms and add synonyms.
 
 **When to switch.** The golden set (§7) includes acronym- and terminology-heavy questions. If those miss the threshold, move to a store with hybrid search: Aurora if cost matters most, or OpenSearch if the CDL runs it anyway. Switching means creating a new KB and re-syncing the same S3 source. At this corpus size that takes minutes, and Ask AI only needs the new KB ID.
 
@@ -253,16 +253,16 @@ sequenceDiagram
   PB->>PB: check session and business unit
   PB->>O: invoke via IAM: user, role, business unit, question, page
   O->>C: static rules + tools + tier block + question
-  alt off-topic, or about CDL data or live numbers
-    C-->>O: short decline, no search (data questions get a console link)
-  else question about the CDL product
+  alt off-topic
+    C-->>O: short standard message, no search
+  else question about the CDL product, its data or live numbers
     loop while Claude calls a tool, at most 4 times
       C-->>O: tool_use search_product_docs(query)
       O->>KB: Retrieve(query + tier and business unit filter)
       KB-->>O: top chunks, reranked
       O->>C: tool_result
     end
-    C-->>O: answer stream with citations
+    C-->>O: answer stream with citations (a data question gets a decline naming the page that shows it)
   end
   O-->>PB: streamed answer
   PB-->>UI: SSE: status, text, citations, done
@@ -277,8 +277,8 @@ sequenceDiagram
    - Then a block with the user's tier.
    - Then the user message, holding the page context (rendered by the server from an allow-listed page ID, plus the selected business unit) and the question.
 3. **Call Claude, which decides first** (`InvokeModelWithResponseStream` on `bedrock-runtime`).
-   - A question that isn't about the CDL product gets a short standard message saying what Ask AI can help with. A question about CDL data or live numbers gets a decline with a link to the right console page.
-   - Neither runs a search. This is the only scope check: there is no separate filter in front of Claude (§5.3).
+   - A question that isn't about the CDL product gets a short standard message saying what Ask AI can help with, without a search. This is the only scope check: there is no separate filter in front of Claude (§5.3).
+   - A question about CDL data or live numbers gets a decline that names the console page showing the answer. That page depends on the role (an audience's size is the **Reach** column on Portfolio audiences for Agency users, and on Audiences for Power Users), so Claude may search the help articles to find it, as the sample Lambda's prompt allows.
 4. **Run the tool loop.**
    - Claude can search up to 4 times within a 90-second budget.
    - Ask AI adds the tier and business unit filter to every `Retrieve` (§5.3).
@@ -336,7 +336,8 @@ sequenceDiagram
 
 - **Endpoints.** Claude: `bedrock-runtime` (`InvokeModelWithResponseStream`). Knowledge Base search: `bedrock-agent-runtime` (`Retrieve`).
 - **Other paths:**
-  - For an off-topic question, or one about CDL data or live numbers, Claude declines in its first response without searching, so steps 6 to 13 don't run.
+  - For an off-topic question, Claude declines in its first response without searching, so steps 6 to 13 don't run.
+  - For a question about CDL data or live numbers, Claude may search (steps 6 to 13) to find the console page that shows the answer, then declines and names that page.
   - A `refusal` stop reason goes to the SDK's refusal-fallback middleware, which retries on the fallback model.
   - When a search starts, the Lambda also sends a `status` event ("Searching product docs…").
 
@@ -362,7 +363,7 @@ Add a Guardrail if NewsCorp's AI or privacy policy requires a managed filter on 
 
 ### 5.4 Agent pattern: our own tool-use loop
 
-We use the KB **`Retrieve`** API as a tool inside our own Claude tool-use loop, not a managed agent or generation API. Even for single questions, the loop lets Claude do three things: rewrite the search query (expanding acronyms), search twice for a compound question, and decline an off-topic or data question without searching.
+We use the KB **`Retrieve`** API as a tool inside our own Claude tool-use loop, not a managed agent or generation API. Even for single questions, the loop lets Claude do three things: rewrite the search query (expanding acronyms), search twice for a compound question, and decline an off-topic question without searching.
 
 | Option | Verdict |
 |---|---|
@@ -473,7 +474,7 @@ sequenceDiagram
 - **One context per conversation.** Owner, tier and prompt version are fixed at creation.
   - A tier mismatch returns `409 context_changed`, and the UI starts a new chat.
   - Switching business unit keeps the chat going, and later searches use the new business unit.
-- **Follow-ups work because the model writes the search query.** It sees the whole conversation and calls, for example, `search_product_docs(query="overlap visibility by tier")`, so no separate query-rewriting step is needed.
+- **Follow-ups work because the model writes the search query.** It sees the whole conversation, so after "How do I approve a request?" the follow-up "and for Agency users?" leads to `search_product_docs(query="can Agency users approve requests")`, and no separate query-rewriting step is needed.
 - **Risk of this pattern: Claude answers without searching.** The system prompt requires a search before any product answer. The eval (§7) checks that every such answer cites a retrieved source.
 
 ### 6.4 Long chats
@@ -549,7 +550,7 @@ sequenceDiagram
 | # | Story | Depends on | Est. |
 |---|---|---|---|
 | 1 | Pre-build spike: region and data residency, Opus 5.5 access on `bedrock-runtime`, S3 Vectors limits and `listContains` filter support in the target region (it works on the sample KB in us-east-1), how the portal backend will reach Ask AI, and a streamed Claude call through `InvokeModelWithResponseStream` with citations intact | — | 2–3 d |
-| 2 | Content plan and article template (the title and its five header lines, §2). Start from the 94 sample articles written from the v3 design (`kb-sample/docs`), including the glossary and the roles article, and turn them into owned production docs | Product, Governance | ongoing |
+| 2 | Content plan and article template (the title and its five header lines, §2). Start from the 94 sample articles written from the v3 design (`kb-sample/docs`), including the glossary and the roles article, and turn them into owned production docs. Fix the 8 sample articles whose "Console page:" isn't a route (`All pages`, `All pages · sidebar role chip`, `Header > Ask AI (all pages)`) | Product, Governance | ongoing |
 | 3 | Golden eval set (types A–B plus decline cases, starting from the sample KB's test cases) and a red-team set per role | 2 | 1 wk |
 | 4 | Infra (CDK/Terraform): private Ask AI Lambda with response streaming, S3 source bucket, S3 Vectors index, product docs KB, IAM | 1 | 1 wk |
 | 5 | Docs publish job: Git or Confluence → S3 Markdown with tier sidecars (`allowed_tiers` plus one flag per role, as `kb-sample/make_sidecars.py` writes them), then KB sync. Runs on merge or by hand | 2, 4 | 3–5 d |
@@ -584,7 +585,7 @@ sequenceDiagram
 7. What stack and hosting does the portal backend use, and can it relay a streamed response? This decides between relaying through it, a CloudFront route, or a module inside it (§5.5).
 8. **Resolved by the v3 design.** The code had the roles Power User, Admin and Agency, and the epic lists Power User, Internal Viewer and Agency. The design's Access and roles page settles it: "Two roles · fixed for this phase", **Power User** and **Agency**. Admin is the Power Users' sidebar section (Access & roles, Connectors), not a role, and Internal Viewer isn't in the design. The knowledge base, the sidecars and the Ask AI Lambda use these two names; the `cdl_ui` role list needs to match.
 9. Does NewsCorp's AI or privacy policy require a managed filter such as Bedrock Guardrails on every model call, or forbid sending pasted personal data to a model? If so, attach a Guardrail to the Claude call (§5.3).
-10. What does the portal send as `bu` for Agency users? Their **Acting as** lists News Corp portfolio and Realtor.com, and the design doesn't say which value business-unit-scoped calls carry. Every article is `all` today, so it doesn't change results yet.
+10. What does the portal send as `bu` for Agency users? Their **Acting as** is greyed out and fixed on News Corp portfolio (the list also holds Realtor.com). News Corp portfolio isn't a business unit like Dow Jones or Realtor.com, business-unit-scoped calls pass a unit name from `GET /api/business-units` as `?bu=`, and the design doesn't say what value those calls carry for Agency users. Every article is `all` today, so it doesn't change results yet.
 11. The v3 design draws the panel as **Ask AI · about this page**: a Sees / Cannot see / Cannot do box, answers marked "From records as of … · not an estimate" that cite the page's records, and a **Save to definition notes** button. Phase 1 answers product help from the KB only and sees no console data (§1). Is answering from the page's records a later phase, and what does the first release's panel show instead? The design also leaves out the Agency version of the panel, Stop, and loading and error states. The sample Ask AI articles describe the panel as drawn, so they change with the answer.
 
 **Phase 2**
