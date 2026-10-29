@@ -1,0 +1,47 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListDocsBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::askai-docs-ACCOUNT_ID",
+      "Condition": { "StringEquals": { "aws:ResourceAccount": "ACCOUNT_ID" } }
+    },
+    {
+      "Sid": "ReadHelpArticles",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::askai-docs-ACCOUNT_ID/docs/*",
+      "Condition": { "StringEquals": { "aws:ResourceAccount": "ACCOUNT_ID" } }
+    },
+    {
+      "Sid": "EmbedAndRerank",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:aws:bedrock:REGION::foundation-model/amazon.titan-embed-text-v2:0",
+        "arn:aws:bedrock:REGION::foundation-model/cohere.rerank-v3-5:0"
+      ]
+    },
+    {
+      "Sid": "RerankApi",
+      "Effect": "Allow",
+      "Action": "bedrock:Rerank",
+      "Resource": "*"
+    },
+    {
+      "Sid": "VectorIndex",
+      "Effect": "Allow",
+      "Action": [
+        "s3vectors:GetIndex",
+        "s3vectors:QueryVectors",
+        "s3vectors:PutVectors",
+        "s3vectors:GetVectors",
+        "s3vectors:DeleteVectors"
+      ],
+      "Resource": "arn:aws:s3vectors:REGION:ACCOUNT_ID:bucket/askai-vectors-ACCOUNT_ID/index/askai-docs-index",
+      "Condition": { "StringEquals": { "aws:ResourceAccount": "ACCOUNT_ID" } }
+    }
+  ]
+}

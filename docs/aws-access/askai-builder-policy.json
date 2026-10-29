@@ -1,0 +1,206 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DocsBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy",
+        "s3:PutBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning",
+        "s3:GetBucketOwnershipControls",
+        "s3:PutBucketOwnershipControls",
+        "s3:GetBucketTagging",
+        "s3:PutBucketTagging"
+      ],
+      "Resource": "arn:aws:s3:::askai-*"
+    },
+    {
+      "Sid": "DocsObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::askai-*/*"
+    },
+    {
+      "Sid": "VectorStore",
+      "Effect": "Allow",
+      "Action": [
+        "s3vectors:CreateVectorBucket",
+        "s3vectors:GetVectorBucket",
+        "s3vectors:DeleteVectorBucket",
+        "s3vectors:CreateIndex",
+        "s3vectors:GetIndex",
+        "s3vectors:ListIndexes",
+        "s3vectors:DeleteIndex",
+        "s3vectors:QueryVectors",
+        "s3vectors:GetVectors",
+        "s3vectors:ListVectors"
+      ],
+      "Resource": "arn:aws:s3vectors:REGION:ACCOUNT_ID:bucket/askai-*"
+    },
+    {
+      "Sid": "KnowledgeBase",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:GetKnowledgeBase",
+        "bedrock:UpdateKnowledgeBase",
+        "bedrock:DeleteKnowledgeBase",
+        "bedrock:CreateDataSource",
+        "bedrock:GetDataSource",
+        "bedrock:UpdateDataSource",
+        "bedrock:DeleteDataSource",
+        "bedrock:ListDataSources",
+        "bedrock:StartIngestionJob",
+        "bedrock:GetIngestionJob",
+        "bedrock:ListIngestionJobs",
+        "bedrock:StopIngestionJob",
+        "bedrock:Retrieve",
+        "bedrock:TagResource",
+        "bedrock:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:bedrock:REGION:ACCOUNT_ID:knowledge-base/*"
+    },
+    {
+      "Sid": "CallModelsForTesting",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5*",
+        "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0",
+        "arn:aws:bedrock:*::foundation-model/cohere.rerank-v3-5:0",
+        "arn:aws:bedrock:REGION:ACCOUNT_ID:inference-profile/global.anthropic.claude-opus-5-5*"
+      ]
+    },
+    {
+      "Sid": "AskAiLambda",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:DeleteFunction",
+        "lambda:InvokeFunction",
+        "lambda:PublishVersion",
+        "lambda:ListVersionsByFunction",
+        "lambda:CreateAlias",
+        "lambda:GetAlias",
+        "lambda:UpdateAlias",
+        "lambda:DeleteAlias",
+        "lambda:PutFunctionConcurrency",
+        "lambda:DeleteFunctionConcurrency",
+        "lambda:GetPolicy",
+        "lambda:TagResource",
+        "lambda:ListTags"
+      ],
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:askai-*"
+    },
+    {
+      "Sid": "AskAiLambdaLayers",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:PublishLayerVersion",
+        "lambda:GetLayerVersion",
+        "lambda:DeleteLayerVersion",
+        "lambda:ListLayerVersions"
+      ],
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:layer:askai-*"
+    },
+    {
+      "Sid": "PassOnlyTheTwoAskAiRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::ACCOUNT_ID:role/askai-lambda-role",
+        "arn:aws:iam::ACCOUNT_ID:role/askai-kb-role"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "lambda.amazonaws.com",
+            "bedrock.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "AskAiLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents",
+        "logs:StartQuery"
+      ],
+      "Resource": "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/lambda/askai-*"
+    },
+    {
+      "Sid": "AskAiDashboardAndAlarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutDashboard",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:DeleteDashboards",
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms"
+      ],
+      "Resource": [
+        "arn:aws:cloudwatch::ACCOUNT_ID:dashboard/askai-*",
+        "arn:aws:cloudwatch:REGION:ACCOUNT_ID:alarm:askai-*"
+      ]
+    },
+    {
+      "Sid": "ListAndReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListAllMyBuckets",
+        "s3vectors:ListVectorBuckets",
+        "bedrock:CreateKnowledgeBase",
+        "bedrock:ListKnowledgeBases",
+        "bedrock:ListFoundationModels",
+        "bedrock:GetFoundationModel",
+        "bedrock:GetFoundationModelAvailability",
+        "bedrock:ListInferenceProfiles",
+        "bedrock:GetInferenceProfile",
+        "bedrock:Rerank",
+        "lambda:ListFunctions",
+        "lambda:ListLayers",
+        "lambda:GetAccountSettings",
+        "iam:ListRoles",
+        "iam:GetRole",
+        "iam:ListRolePolicies",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "logs:DescribeLogGroups",
+        "logs:GetQueryResults",
+        "logs:StopQuery",
+        "cloudwatch:ListDashboards",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:ListMetrics"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

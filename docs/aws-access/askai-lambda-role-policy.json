@@ -1,0 +1,45 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteOwnLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/lambda/askai-*"
+    },
+    {
+      "Sid": "CallClaude",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5*",
+        "arn:aws:bedrock:REGION:ACCOUNT_ID:inference-profile/global.anthropic.claude-opus-5-5*"
+      ]
+    },
+    {
+      "Sid": "SearchTheHelpArticles",
+      "Effect": "Allow",
+      "Action": "bedrock:Retrieve",
+      "Resource": "arn:aws:bedrock:REGION:ACCOUNT_ID:knowledge-base/KB_ID"
+    },
+    {
+      "Sid": "RerankSearchResults",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:REGION::foundation-model/cohere.rerank-v3-5:0"
+    },
+    {
+      "Sid": "RerankApi",
+      "Effect": "Allow",
+      "Action": "bedrock:Rerank",
+      "Resource": "*"
+    }
+  ]
+}
