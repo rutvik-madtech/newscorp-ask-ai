@@ -9,7 +9,7 @@
         "logs:CreateLogStream",
         "logs:PutLogEvents"
       ],
-      "Resource": "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/lambda/askai-*"
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/askai-*"
     },
     {
       "Sid": "CallClaude",
@@ -20,20 +20,20 @@
       ],
       "Resource": [
         "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5*",
-        "arn:aws:bedrock:REGION:ACCOUNT_ID:inference-profile/global.anthropic.claude-opus-5-5*"
+        "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-5-5*"
       ]
     },
     {
       "Sid": "SearchTheHelpArticles",
       "Effect": "Allow",
       "Action": "bedrock:Retrieve",
-      "Resource": "arn:aws:bedrock:REGION:ACCOUNT_ID:knowledge-base/KB_ID"
+      "Resource": "arn:aws:bedrock:*:*:knowledge-base/*"
     },
     {
       "Sid": "RerankSearchResults",
       "Effect": "Allow",
       "Action": "bedrock:InvokeModel",
-      "Resource": "arn:aws:bedrock:REGION::foundation-model/cohere.rerank-v3-5:0"
+      "Resource": "arn:aws:bedrock:*::foundation-model/cohere.rerank-v3-5:0"
     },
     {
       "Sid": "RerankApi",

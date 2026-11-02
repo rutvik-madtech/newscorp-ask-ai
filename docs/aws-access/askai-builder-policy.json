@@ -49,7 +49,7 @@
         "s3vectors:GetVectors",
         "s3vectors:ListVectors"
       ],
-      "Resource": "arn:aws:s3vectors:REGION:ACCOUNT_ID:bucket/askai-*"
+      "Resource": "arn:aws:s3vectors:*:*:bucket/askai-*"
     },
     {
       "Sid": "KnowledgeBase",
@@ -71,7 +71,7 @@
         "bedrock:TagResource",
         "bedrock:ListTagsForResource"
       ],
-      "Resource": "arn:aws:bedrock:REGION:ACCOUNT_ID:knowledge-base/*"
+      "Resource": "arn:aws:bedrock:*:*:knowledge-base/*"
     },
     {
       "Sid": "CallModelsForTesting",
@@ -84,7 +84,7 @@
         "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5*",
         "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0",
         "arn:aws:bedrock:*::foundation-model/cohere.rerank-v3-5:0",
-        "arn:aws:bedrock:REGION:ACCOUNT_ID:inference-profile/global.anthropic.claude-opus-5-5*"
+        "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-5-5*"
       ]
     },
     {
@@ -110,7 +110,7 @@
         "lambda:TagResource",
         "lambda:ListTags"
       ],
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:askai-*"
+      "Resource": "arn:aws:lambda:*:*:function:askai-*"
     },
     {
       "Sid": "AskAiLambdaLayers",
@@ -121,15 +121,15 @@
         "lambda:DeleteLayerVersion",
         "lambda:ListLayerVersions"
       ],
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:layer:askai-*"
+      "Resource": "arn:aws:lambda:*:*:layer:askai-*"
     },
     {
       "Sid": "PassOnlyTheTwoAskAiRoles",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": [
-        "arn:aws:iam::ACCOUNT_ID:role/askai-lambda-role",
-        "arn:aws:iam::ACCOUNT_ID:role/askai-kb-role"
+        "arn:aws:iam::*:role/askai-lambda-role",
+        "arn:aws:iam::*:role/askai-kb-role"
       ],
       "Condition": {
         "StringEquals": {
@@ -153,7 +153,7 @@
         "logs:FilterLogEvents",
         "logs:StartQuery"
       ],
-      "Resource": "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/lambda/askai-*"
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/askai-*"
     },
     {
       "Sid": "AskAiDashboardAndAlarms",
@@ -166,8 +166,8 @@
         "cloudwatch:DeleteAlarms"
       ],
       "Resource": [
-        "arn:aws:cloudwatch::ACCOUNT_ID:dashboard/askai-*",
-        "arn:aws:cloudwatch:REGION:ACCOUNT_ID:alarm:askai-*"
+        "arn:aws:cloudwatch::*:dashboard/askai-*",
+        "arn:aws:cloudwatch:*:*:alarm:askai-*"
       ]
     },
     {

@@ -14,13 +14,9 @@ The permissions are what the proof of concept needed in the dev account, plus wh
 
 The admin creates roles 2 and 3. The build user can't create or change IAM roles; it can only pass these two roles to Lambda and Bedrock.
 
-Before using the files, replace the placeholders:
+The three permission policies can be pasted into the IAM console's JSON editor as they are: they limit access by the `askai-` name, not by account or region. Only `askai-kb-role-trust.json` has a placeholder: replace `ACCOUNT_ID` (twice) with the News Corp AWS account ID.
 
-| Placeholder | Value |
-|---|---|
-| `ACCOUNT_ID` | The News Corp AWS account ID |
-| `REGION` | The region agreed for Ask AI (NWS1-192), for example `us-east-1` |
-| `KB_ID` | The knowledge base ID. It exists only after the knowledge base is created, so set it in `askai-lambda-role-policy.json` then |
+Optional tightening once the knowledge base exists: in `askai-lambda-role-policy.json`, change `knowledge-base/*` in `SearchTheHelpArticles` to `knowledge-base/<the knowledge base ID>`.
 
 ## What the build user can do
 
